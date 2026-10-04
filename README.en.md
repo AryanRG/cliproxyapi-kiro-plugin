@@ -25,6 +25,11 @@ The regression tests cover direct images, image-only/mixed tool results,
 multiple images, invalid sources, duplicate results, and conversation history.
 After installing a rebuilt library, restart CLIProxyAPI to load it.
 
+When account-scoped model discovery is unavailable, Opus 5.5 advertises the
+[documented Kiro 1M context window](https://kiro.dev/docs/models/) rather than
+the generic 200K fallback. Positive account-reported token limits still override
+this fallback. Other models and output limits are unchanged by this patch.
+
 ```bash
 gofmt -w .
 go test ./...
