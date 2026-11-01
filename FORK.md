@@ -25,7 +25,7 @@ Upstream base: `xiaokui-dev/cliproxyapi-kiro-plugin` at `f7b60a605c3613c18e4011b
 
 Run `python3 scripts/build_release.py`. It runs tests, race checks, and vet before producing a versioned library and SHA-256 manifest in ignored `dist/`.
 
-Install a versioned artifact (`kiro-v<VERSION>.dylib` on macOS), retaining an immutable backup outside the host's plugin discovery directory. Set CLIProxy's `plugins.configs.kiro.store.version` to that exact local version. The host may delete unselected plugin files, so its discovery directory is not a rollback store.
+Install a versioned artifact (`kiro-v<VERSION>.dylib` on macOS), retaining an immutable backup outside the host's plugin discovery directory. Set CLIProxy's `plugins.configs.kiro.store.version` to that exact local version, and mark its store source as local-managed rather than the upstream release repository. The host may delete unselected plugin files, so its discovery directory is not a rollback store.
 
 The version pin controls discovery; it cannot prevent a user explicitly installing another plugin version. Before accepting CLIProxy, Claude CLI, or T3 updates, verify plugin registration, catalogue, effort forwarding, tool round trips, cancellation, account quota, and retained model IDs. Pinning is controlled rollout, not a guarantee against incompatible host updates.
 
