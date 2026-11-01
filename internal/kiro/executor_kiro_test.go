@@ -115,7 +115,7 @@ func TestExecutorLabelsTokenEstimates(t *testing.T) {
 	raw, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
 		Model: "claude-opus-5.5", Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`), StorageJSON: []byte(`{"accessToken":"test"}`),
 	}})
-	for _, execute := range []func([]byte) ([]byte, error){executeKiro, executeKiroStream} {
+	for _, execute := range []func([]byte) ([]byte, error){executeKiro} {
 		output, err := execute(raw)
 		if err != nil {
 			t.Fatal(err)

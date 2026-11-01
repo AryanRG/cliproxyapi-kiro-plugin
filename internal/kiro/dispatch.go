@@ -24,9 +24,19 @@ func HandleMethod(method string, request []byte) ([]byte, error) {
 		return wire.ErrorStatus("not_supported", "Kiro credits cannot be reset by this plugin", http.StatusMethodNotAllowed), nil
 	// ---- lifecycle ----
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		if method == pluginabi.MethodPluginRegister {
+			activeStreams.Lock()
+			if len(activeStreams.jobs) != 0 {
+				activeStreams.Unlock()
+				return wire.ErrorStatus("streams_active", "Cannot register while streams are active", 503), nil
+			}
+			activeStreams.stopped = false
+			activeStreams.Unlock()
+		}
 		config.Apply(request)
 		return wire.OK(kiroRegistration())
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
+		ShutdownStreams()
 		return wire.OK(map[string]any{})
 
 	// ---- auth provider ----
@@ -76,7 +86,7 @@ func kiroRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerKiro,
-			Version:          "0.2.0-local.2",
+			Version:          "0.3.0-local.4",
 			Author:           "xiaokui-dev",
 			GitHubRepository: "https://github.com/xiaokui-dev/cliproxyapi-kiro-plugin",
 			ConfigFields: []pluginapi.ConfigField{

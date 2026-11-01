@@ -6,6 +6,7 @@ Upstream base: `xiaokui-dev/cliproxyapi-kiro-plugin` at `f7b60a605c3613c18e4011b
 
 ## Current changes
 
+- Stream AWS frames incrementally through host callbacks, including text, reasoning and tool arguments.
 - Forward declared effort, adaptive thinking, display preference, and output limits to Kiro.
 - Advertise the verified effort levels for exact supported Kiro model IDs.
 - Reject unsupported controls before inference instead of silently discarding them.
@@ -39,10 +40,36 @@ Source fork: https://github.com/AryanRG/cliproxyapi-kiro-plugin. Local releases 
 
 Token accounting: Plugin executor responses include `X-Kiro-Token-Usage: estimated` and
 `X-Kiro-Token-Estimator: utf8-bytes-div4`. Counts include returned text and
-tool names/arguments, but are not provider token counters. Hidden reasoning,
-cache usage and other provider overhead are not observable. Monthly credit
+tool names/arguments and streamed reasoning, but are not provider token counters.
+Hidden reasoning, cache usage and other provider overhead are not observable. Monthly credit
 balances come directly from Kiro; do not convert these estimates into credits.
 
 CLIProxy may strip these headers unless response-header forwarding is enabled.
 The T3 integration labels token estimates explicitly without relying on forwarded
 headers. This release does not change the host response-header policy.
+
+## Incremental streaming
+
+Streaming requires host HTTP operations, HTTP stream read/close, and asynchronous
+executor emit/close callbacks. CLIProxyAPI v8.0.49 was exercised live with Messages
+and Responses. Older hosts lacking these callbacks fail clearly before inference;
+there is no buffered fallback or credential-refresh owner in the plugin.
+
+The plugin returns immediately, emits a message-start event, and consumes bounded
+AWS frames with prelude/message CRC validation. Text and reasoning deltas, restored
+tool names, fragmented arguments, parallel tool IDs, and terminal usage are emitted
+in order. Inline bracket-style tool calls remain supported and are deduplicated
+against structured calls. Invalid arguments or incomplete/error frames fail rather
+than manufacturing an empty tool input or successful completion.
+
+Each streaming request is issued once. Disconnect, quiesce, shutdown, a six-minute
+upstream idle interval, a 30-minute absolute deadline, or a 64 MiB upstream body
+limit cancels the host HTTP operation and closes both stream handles. Pings every
+ten seconds do not count as upstream activity and do not extend either deadline.
+The non-streaming compatibility path retains its existing empty-response behavior.
+
+The host Responses translator ignores Claude ping events. Clients requiring
+transport keepalives must provide their own bounded SSE heartbeat handling. Our
+Codex adapter relays real streams and emits status-only progress events during gaps;
+its 360-second upstream read timeout remains independent of those heartbeats.
+No tool call, assistant text, or completion is invented by a heartbeat.

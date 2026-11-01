@@ -121,7 +121,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 }
 
 //export cliproxyPluginShutdown
-func cliproxyPluginShutdown() {}
+func cliproxyPluginShutdown() { kiro.ShutdownStreams() }
 
 // callHostResult invokes a host callback method and returns the host's raw
 // response bytes (a JSON envelope). The host-owned response buffer is freed

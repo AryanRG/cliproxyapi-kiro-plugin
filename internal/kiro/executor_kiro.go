@@ -147,26 +147,6 @@ func executeKiro(request []byte) ([]byte, error) {
 	})
 }
 
-// executeKiroStream handles a streaming request. It fetches the full upstream
-// response, then emits a complete Claude SSE sequence as ordered chunks (the
-// host forwards them one by one). End-to-end incremental streaming from upstream
-// is a later optimization.
-func executeKiroStream(request []byte) ([]byte, error) {
-	res, errEnv, err := fetchKiroEvents(request)
-	if err != nil {
-		return nil, err
-	}
-	if errEnv != nil {
-		return errEnv, nil
-	}
-
-	chunks := buildClaudeStreamChunks(res.text, res.calls, res.model, estimateTokens(len(res.requestPayload)))
-	return wire.OK(executorStreamResponse{
-		Headers: estimatedUsageHeaders("text/event-stream"),
-		Chunks:  chunks,
-	})
-}
-
 func estimatedUsageHeaders(contentType string) http.Header {
 	return http.Header{
 		"Content-Type":           {contentType},

@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"encoding/binary"
+	"hash/crc32"
 	"testing"
 )
 
@@ -25,11 +26,13 @@ func encodeFrame(eventType, payloadJSON string) []byte {
 	var prelude [12]byte
 	binary.BigEndian.PutUint32(prelude[0:4], uint32(totalLen))
 	binary.BigEndian.PutUint32(prelude[4:8], uint32(len(header)))
-	// prelude[8:12] CRC = 0
+	binary.BigEndian.PutUint32(prelude[8:12], crc32.ChecksumIEEE(prelude[:8]))
 	frame = append(frame, prelude[:]...)
 	frame = append(frame, header...)
 	frame = append(frame, payload...)
-	frame = append(frame, 0, 0, 0, 0) // message CRC = 0
+	var crc [4]byte
+	binary.BigEndian.PutUint32(crc[:], crc32.ChecksumIEEE(frame))
+	frame = append(frame, crc[:]...)
 	return frame
 }
 
