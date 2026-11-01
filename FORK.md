@@ -37,8 +37,12 @@ The upstream plugin currently estimates message token counts and exposes credits
 
 Source fork: https://github.com/AryanRG/cliproxyapi-kiro-plugin. Local releases are tested artifacts; public release assets, when available, are published separately.
 
-Token accounting: Responses expose `X-Kiro-Token-Usage: estimated` and
+Token accounting: Plugin executor responses include `X-Kiro-Token-Usage: estimated` and
 `X-Kiro-Token-Estimator: utf8-bytes-div4`. Counts include returned text and
 tool names/arguments, but are not provider token counters. Hidden reasoning,
 cache usage and other provider overhead are not observable. Monthly credit
 balances come directly from Kiro; do not convert these estimates into credits.
+
+CLIProxy may strip these headers unless response-header forwarding is enabled.
+The T3 integration labels token estimates explicitly without relying on forwarded
+headers. This release does not change the host response-header policy.
