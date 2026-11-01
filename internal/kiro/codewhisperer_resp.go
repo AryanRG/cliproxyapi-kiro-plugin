@@ -128,9 +128,18 @@ func aggregateToClaudeMessage(text string, calls []toolCall, model string, reque
 		StopReason: stopReason,
 		Usage: claudeUsage{
 			InputTokens:  estimateTokens(len(requestPayload)),
-			OutputTokens: estimateTokens(len(text)),
+			OutputTokens: estimateOutputTokens(text, calls),
 		},
 	}
+}
+
+// Kiro supplies no exact token counters; include tool output in the compatibility estimate.
+func estimateOutputTokens(text string, calls []toolCall) int {
+	byteLen := len(text)
+	for _, call := range calls {
+		byteLen += len(call.name) + len(call.input)
+	}
+	return estimateTokens(byteLen)
 }
 
 // parseToolInput turns accumulated input text into a JSON value; invalid or

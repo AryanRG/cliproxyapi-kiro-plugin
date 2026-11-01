@@ -79,7 +79,7 @@ func buildClaudeStreamChunks(text string, calls []toolCall, model string, inputT
 	add("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
-		"usage": map[string]any{"output_tokens": estimateTokens(len(text))},
+		"usage": map[string]any{"output_tokens": estimateOutputTokens(text, calls)},
 	})
 	add("message_stop", map[string]any{"type": "message_stop"})
 	return chunks

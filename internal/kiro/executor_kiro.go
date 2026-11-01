@@ -143,7 +143,7 @@ func executeKiro(request []byte) ([]byte, error) {
 
 	return wire.OK(pluginapi.ExecutorResponse{
 		Payload: payload,
-		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Headers: estimatedUsageHeaders("application/json"),
 	})
 }
 
@@ -162,9 +162,17 @@ func executeKiroStream(request []byte) ([]byte, error) {
 
 	chunks := buildClaudeStreamChunks(res.text, res.calls, res.model, estimateTokens(len(res.requestPayload)))
 	return wire.OK(executorStreamResponse{
-		Headers: map[string][]string{"Content-Type": {"text/event-stream"}},
+		Headers: estimatedUsageHeaders("text/event-stream"),
 		Chunks:  chunks,
 	})
+}
+
+func estimatedUsageHeaders(contentType string) http.Header {
+	return http.Header{
+		"Content-Type":           {contentType},
+		"X-Kiro-Token-Usage":     {"estimated"},
+		"X-Kiro-Token-Estimator": {"utf8-bytes-div4"},
+	}
 }
 
 // kiroRequestHeaders builds the AWS/KiroIDE headers required by CodeWhisperer.

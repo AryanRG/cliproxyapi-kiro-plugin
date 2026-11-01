@@ -105,3 +105,33 @@ func TestFetchKiroEventsStopsAfterEmptyResponseLimit(t *testing.T) {
 		t.Fatalf("expected final empty result, got %+v", result)
 	}
 }
+
+func TestExecutorLabelsTokenEstimates(t *testing.T) {
+	oldHTTPDo := kiroHTTPDo
+	t.Cleanup(func() { kiroHTTPDo = oldHTTPDo })
+	kiroHTTPDo = func(req hostapi.HTTPRequest) (*hostapi.HTTPResponse, error) {
+		return &hostapi.HTTPResponse{StatusCode: 200, Body: encodeFrame("assistantResponseEvent", `{"content":"hello"}`)}, nil
+	}
+	raw, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
+		Model: "claude-opus-5.5", Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`), StorageJSON: []byte(`{"accessToken":"test"}`),
+	}})
+	for _, execute := range []func([]byte) ([]byte, error){executeKiro, executeKiroStream} {
+		output, err := execute(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			OK     bool `json:"ok"`
+			Result struct {
+				Headers map[string][]string `json:"headers"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(output, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		values := envelope.Result.Headers["X-Kiro-Token-Usage"]
+		if !envelope.OK || len(values) != 1 || values[0] != "estimated" {
+			t.Fatalf("missing estimate provenance: %s", output)
+		}
+	}
+}
