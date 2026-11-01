@@ -1,3 +1,5 @@
+> Maintained fork: verified Kiro effort controls and standard account-credit quota support. See [FORK.md](FORK.md) for compatibility, tests, releases, and limitations. Upstream: [xiaokui-dev/cliproxyapi-kiro-plugin](https://github.com/xiaokui-dev/cliproxyapi-kiro-plugin).
+
 # Kiro Plugin
 
 [中文](./README.md) | English

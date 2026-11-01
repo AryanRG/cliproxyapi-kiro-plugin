@@ -35,4 +35,4 @@ Merge upstream changes into a review branch; do not update the running plugin au
 
 The upstream plugin currently estimates message token counts and exposes credits through its custom management endpoint. Standard quota capability is implemented. Native metering events, precise token counters, account attribution in historical sessions, and consumer-side display must be verified independently. A model-price alias can affect dollar estimates, but cannot manufacture token counts or account credit totals.
 
-No public fork or release has been published from this checkout.
+Source fork: https://github.com/AryanRG/cliproxyapi-kiro-plugin. Local releases are tested artifacts; public release assets, when available, are published separately.
