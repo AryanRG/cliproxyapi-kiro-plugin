@@ -14,6 +14,14 @@ import (
 // JSON envelope. request is the raw JSON body of the method-specific request.
 func HandleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
+	case "quota.identifier":
+		return wire.OK(identifierResponse{Identifier: providerKiro})
+	case "quota.describe":
+		return wire.OK(map[string]any{"supported_providers": []string{providerKiro}, "display_name": "Kiro credits", "supports_reset": false})
+	case "quota.fetch":
+		return fetchNormalizedQuota(request)
+	case "quota.reset":
+		return wire.ErrorStatus("not_supported", "Kiro credits cannot be reset by this plugin", http.StatusMethodNotAllowed), nil
 	// ---- lifecycle ----
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		config.Apply(request)
@@ -68,7 +76,7 @@ func kiroRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerKiro,
-			Version:          "0.1.1",
+			Version:          "0.2.0-local.1",
 			Author:           "xiaokui-dev",
 			GitHubRepository: "https://github.com/xiaokui-dev/cliproxyapi-kiro-plugin",
 			ConfigFields: []pluginapi.ConfigField{
@@ -84,6 +92,7 @@ func kiroRegistration() registration {
 			ExecutorInputFormats:  []string{"claude"},
 			ExecutorOutputFormats: []string{"claude"},
 			ManagementAPI:         true,
+			QuotaProvider:         true,
 		},
 	}
 }

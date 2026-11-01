@@ -1,0 +1,21 @@
+name: compatibility-tests
+on:
+  push:
+    branches: ['**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - run: go vet ./...
+      - name: Build C ABI plugin
+        env:
+          CGO_ENABLED: '1'
+        run: go build -trimpath -buildmode=c-shared -o /tmp/kiro.so .

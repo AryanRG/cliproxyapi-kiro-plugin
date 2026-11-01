@@ -36,3 +36,4 @@ auths/
 # Editor/IDE
 # .idea/
 # .vscode/
+/dist/

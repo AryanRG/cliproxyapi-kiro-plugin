@@ -63,6 +63,10 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 	}
 
 	model := firstNonEmptyStr(req.Model, creq.Model)
+	controls, errControls := kiroRequestControls(creq, model)
+	if errControls != nil {
+		return nil, wire.ErrorStatus("invalid_model_controls", errControls.Error(), http.StatusBadRequest), nil
+	}
 	// 请求头携带 accessToken,故端点主机必须由校验过的 region 推导。
 	region, errRegion := resolveRegion(cred.Region, cred.IDCRegion)
 	if errRegion != nil {
@@ -77,6 +81,7 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 	for attempt := 0; attempt < maxEmptyResponseAttempts; attempt++ {
 		// Rebuild each attempt so a retry carries a fresh conversationId.
 		cwReq, maps := buildCodeWhispererRequest(creq, model, cred)
+		cwReq.AdditionalModelRequestFields = controls
 		cwBody, errMarshal := json.Marshal(cwReq)
 		if errMarshal != nil {
 			return nil, nil, fmt.Errorf("encode codewhisperer request: %w", errMarshal)

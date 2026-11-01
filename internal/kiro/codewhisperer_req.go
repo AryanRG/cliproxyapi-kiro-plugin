@@ -17,10 +17,18 @@ const (
 // ---- Claude Messages request shapes (executor input format = "claude") ----
 
 type claudeRequest struct {
-	Model    string          `json:"model"`
-	System   json.RawMessage `json:"system"`
-	Messages []claudeMessage `json:"messages"`
-	Tools    []claudeTool    `json:"tools"`
+	OutputConfig *struct {
+		Effort string `json:"effort"`
+	} `json:"output_config"`
+	Thinking *struct {
+		Type    string `json:"type"`
+		Display string `json:"display"`
+	} `json:"thinking"`
+	MaxTokens *int            `json:"max_tokens"`
+	Model     string          `json:"model"`
+	System    json.RawMessage `json:"system"`
+	Messages  []claudeMessage `json:"messages"`
+	Tools     []claudeTool    `json:"tools"`
 }
 
 type claudeMessage struct {
@@ -56,8 +64,9 @@ type claudeTool struct {
 // ---- CodeWhisperer request shapes ----
 
 type cwRequest struct {
-	ConversationState cwConversationState `json:"conversationState"`
-	ProfileArn        string              `json:"profileArn,omitempty"`
+	AdditionalModelRequestFields map[string]any      `json:"additionalModelRequestFields,omitempty"`
+	ConversationState            cwConversationState `json:"conversationState"`
+	ProfileArn                   string              `json:"profileArn,omitempty"`
 }
 
 type cwConversationState struct {

@@ -336,6 +336,7 @@ func availableModelsToPluginModels(available []availableModel) []pluginapi.Model
 
 		models = append(models, pluginapi.ModelInfo{
 			ID:                         clientID,
+			Thinking:                   modelThinkingSupport(nativeID),
 			Object:                     "model",
 			OwnedBy:                    providerKiro,
 			Type:                       "claude",
