@@ -62,7 +62,10 @@ func StreamEmit(id string, payload []byte) error {
 func StreamClose(id, code string) error {
 	req := map[string]any{"stream_id": id}
 	if code != "" {
-		req["error_detail"] = map[string]any{"code": code, "http_status": 502, "message": "Kiro stream interrupted (" + code + "). No request replayed."}
+		msg := "Kiro stream interrupted (" + code + "). No request replayed."
+		// "error" is the plain fallback for hosts that predate error_detail.
+		req["error"] = msg
+		req["error_detail"] = map[string]any{"code": code, "http_status": 502, "message": msg}
 	}
 	return invoke(pluginabi.MethodHostStreamClose, req, nil)
 }
@@ -77,5 +80,7 @@ func StreamCloseError(id, code, message string, status, retryAfterSeconds int, r
 	if retryable {
 		detail["retryable"] = true
 	}
-	return invoke(pluginabi.MethodHostStreamClose, map[string]any{"stream_id": id, "error_detail": detail}, nil)
+	// "error" is the plain fallback for hosts that predate error_detail; without
+	// it such hosts would close the stream as a clean, empty success.
+	return invoke(pluginabi.MethodHostStreamClose, map[string]any{"stream_id": id, "error": message, "error_detail": detail}, nil)
 }
