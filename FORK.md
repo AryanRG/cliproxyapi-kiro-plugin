@@ -6,6 +6,8 @@ Upstream base: `xiaokui-dev/cliproxyapi-kiro-plugin` at `f7b60a605c3613c18e4011b
 
 ## Current changes
 
+- 0.4.0-local.2: clamp client `max_tokens` into Kiro's 1024–64000 range instead of rejecting the request (Claude Code sends values outside it).
+
 - Stream AWS frames incrementally through host callbacks, including text, reasoning and tool arguments.
 - Forward declared effort, adaptive thinking, display preference, and output limits to Kiro.
 - Advertise the verified effort levels for exact supported Kiro model IDs.

@@ -56,8 +56,6 @@ func TestInvalidEffortBlockedBeforeHTTP(t *testing.T) {
 		`{"model":"claude-opus-5.5","output_config":{"effort":"ultracode"}}`,
 		`{"model":"unknown","output_config":{"effort":"high"}}`,
 		`{"model":"claude-opus-5.5","thinking":{"type":"disabled"}}`,
-		`{"model":"claude-opus-5.5","max_tokens":100000}`,
-		`{"model":"claude-opus-5.5","max_tokens":100}`,
 		`{"model":"claude-opus-5.5","thinking":{"type":"adaptive","display":"raw"}}`,
 	} {
 		var p struct{ Model string }
@@ -101,6 +99,30 @@ func TestLegacyAndOptionalControls(t *testing.T) {
 		m := availableModelsToPluginModels([]availableModel{{ModelID: model}})
 		if m[0].ID != model || m[0].Thinking == nil || len(m[0].Thinking.Levels) != 5 {
 			t.Fatalf("catalog: %+v", m)
+		}
+	}
+}
+
+func TestMaxTokensClampedForKiro(t *testing.T) {
+	old := kiroHTTPDo
+	defer func() { kiroHTTPDo = old }()
+	for in, want := range map[int]int{1: 1024, 100: 1024, 1024: 1024, 32000: 32000, 64000: 64000, 128000: 64000} {
+		kiroHTTPDo = func(req hostapi.HTTPRequest) (*hostapi.HTTPResponse, error) {
+			var body map[string]json.RawMessage
+			json.Unmarshal(req.Body, &body)
+			var f struct {
+				Max int `json:"max_tokens"`
+			}
+			json.Unmarshal(body["additionalModelRequestFields"], &f)
+			if f.Max != want {
+				t.Errorf("max_tokens %d sent as %d, want %d", in, f.Max, want)
+			}
+			return &hostapi.HTTPResponse{StatusCode: 200, Body: encodeFrame("assistantResponseEvent", `{"content":"ok"}`)}, nil
+		}
+		payload := json.RawMessage(fmt.Sprintf(`{"model":"claude-opus-5.5","messages":[{"role":"user","content":"hi"}],"max_tokens":%d}`, in))
+		raw, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "claude-opus-5.5", Payload: payload, StorageJSON: json.RawMessage(`{"accessToken":"test"}`)}})
+		if _, env, err := fetchKiroEvents(raw); err != nil || env != nil {
+			t.Fatalf("max_tokens %d: err=%v env=%s", in, err, env)
 		}
 	}
 }

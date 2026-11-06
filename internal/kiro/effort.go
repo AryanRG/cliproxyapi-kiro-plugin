@@ -64,13 +64,29 @@ func kiroRequestControls(req claudeRequest, model string) (map[string]any, error
 		fields["thinking"] = thinking
 	}
 	if req.MaxTokens != nil {
-		if *req.MaxTokens < 1024 || *req.MaxTokens > 64000 {
-			return nil, fmt.Errorf("Kiro max_tokens must be between 1024 and 64000")
-		}
-		fields["max_tokens"] = *req.MaxTokens
+		// Kiro accepts 1024..64000. Clients such as Claude Code send values outside
+		// that range (large defaults for newer models, tiny limits for side requests),
+		// so clamp instead of failing the whole request.
+		fields["max_tokens"] = clampKiroMaxTokens(*req.MaxTokens)
 	}
 	if len(fields) == 0 {
 		return nil, nil
 	}
 	return fields, nil
+}
+
+const (
+	kiroMinMaxTokens = 1024
+	kiroMaxMaxTokens = 64000
+)
+
+// clampKiroMaxTokens maps any client max_tokens into Kiro's accepted range.
+func clampKiroMaxTokens(n int) int {
+	if n < kiroMinMaxTokens {
+		return kiroMinMaxTokens
+	}
+	if n > kiroMaxMaxTokens {
+		return kiroMaxMaxTokens
+	}
+	return n
 }
