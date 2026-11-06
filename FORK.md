@@ -73,3 +73,11 @@ transport keepalives must provide their own bounded SSE heartbeat handling. Our
 Codex adapter relays real streams and emits status-only progress events during gaps;
 its 360-second upstream read timeout remains independent of those heartbeats.
 No tool call, assistant text, or completion is invented by a heartbeat.
+
+## Count tokens
+
+`executor.count_tokens` returns `{"input_tokens":N}` computed locally with the
+o200k_base BPE (pure Go, vocabulary compiled in, works offline) plus
+Anthropic's documented image estimate. Kiro has no count endpoint, and the
+Anthropic tokenizer differs, so this is an estimate (`X-Kiro-Token-Usage:
+estimated`, `X-Kiro-Token-Estimator: o200k-bpe`), not a provider count.
