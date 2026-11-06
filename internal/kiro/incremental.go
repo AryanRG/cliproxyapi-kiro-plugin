@@ -31,12 +31,27 @@ type incrementalMessage struct {
 	bracketCalls []toolCall
 	fingerprints map[string]bool
 	toolCount    int
+	model        string
+	inputTokens  int // request-byte estimate, used when Kiro reports no usage
+	started      bool
+	usage        kiroUsage
 }
 
+// newIncrementalMessage prepares the SSE translator. message_start is deferred
+// until the first content, reasoning, tool or usage event so that an upstream
+// error arriving first can still be reported as an HTTP error instead of a
+// partially started message. Content is never buffered beyond that point.
 func newIncrementalMessage(model string, inputTokens int, maps *toolNameMaps, emit func([]byte) error) (*incrementalMessage, error) {
-	s := &incrementalMessage{emit: emit, maps: maps, block: -1, tools: map[string]*streamingTool{}, fingerprints: map[string]bool{}}
-	err := s.event("message_start", map[string]any{"message": map[string]any{"id": randomMessageID(), "type": "message", "role": "assistant", "model": model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": inputTokens, "output_tokens": 0}}})
-	return s, err
+	return &incrementalMessage{emit: emit, maps: maps, block: -1, tools: map[string]*streamingTool{}, fingerprints: map[string]bool{}, model: model, inputTokens: inputTokens}, nil
+}
+func (s *incrementalMessage) start() error {
+	if s.started {
+		return nil
+	}
+	s.started = true
+	usage, _ := s.usage.anthropicUsage(s.model, s.inputTokens, 0)
+	usage["output_tokens"] = 0
+	return s.event("message_start", map[string]any{"message": map[string]any{"id": randomMessageID(), "type": "message", "role": "assistant", "model": s.model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": usage}})
 }
 func (s *incrementalMessage) event(kind string, data map[string]any) error {
 	data["type"] = kind
@@ -58,6 +73,9 @@ func (s *incrementalMessage) closeBlock() error {
 func (s *incrementalMessage) delta(kind, text string) error {
 	if text == "" {
 		return nil
+	}
+	if err := s.start(); err != nil {
+		return err
 	}
 	if s.kind != kind {
 		if err := s.closeBlock(); err != nil {
@@ -130,6 +148,14 @@ func (s *incrementalMessage) content(text string, final bool) error {
 	return nil
 }
 func (s *incrementalMessage) consume(kind string, p framePayload) error {
+	if isUsageEvent(kind) {
+		s.usage.observe(kind, p)
+		if s.usage.contextOverflow() {
+			// Hold message_start: an empty overflowed turn becomes an HTTP 400.
+			return nil
+		}
+		return s.start()
+	}
 	// Shape fallback is only appropriate when the provider omitted the event type.
 	if kind != "" && kind != "assistantResponseEvent" && kind != "reasoningContentEvent" && kind != "toolUseEvent" {
 		return nil
@@ -165,6 +191,9 @@ func (s *incrementalMessage) consume(kind string, p framePayload) error {
 					return err
 				}
 				if err := s.closeBlock(); err != nil {
+					return err
+				}
+				if err := s.start(); err != nil {
 					return err
 				}
 				t = &streamingTool{index: s.next, name: s.maps.fromKiro(ev.Name), ignored: ev.Name == kiroPlaceholderToolName}
@@ -272,13 +301,17 @@ func (s *incrementalMessage) finish() error {
 		}
 	}
 	if s.visibleBytes == 0 && s.toolCount == 0 {
+		if s.usage.contextOverflow() {
+			return contextWindowFull(s.usage)
+		}
 		return fmt.Errorf("empty_upstream_response")
 	}
+	usage, _ := s.usage.anthropicUsage(s.model, s.inputTokens, estimateTokens(s.outputBytes))
 	stop := "end_turn"
 	if s.toolCount > 0 {
 		stop = "tool_use"
 	}
-	if err := s.event("message_delta", map[string]any{"delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": estimateTokens(s.outputBytes)}}); err != nil {
+	if err := s.event("message_delta", map[string]any{"delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": usage}); err != nil {
 		return err
 	}
 	return s.event("message_stop", map[string]any{})

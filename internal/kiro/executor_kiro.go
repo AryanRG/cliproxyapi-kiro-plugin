@@ -34,6 +34,7 @@ type kiroExecResult struct {
 	calls          []toolCall
 	model          string
 	requestPayload []byte
+	usage          kiroUsage
 }
 
 // fetchKiroEvents runs the shared request path: build the conversationState
@@ -98,23 +99,32 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 			return nil, wire.ErrorStatus("upstream_error", errDo.Error(), http.StatusBadGateway), nil
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			// Propagate the upstream status verbatim. We deliberately do NOT remap the
+			// Classified errors keep the upstream status verbatim except for the
+			// documented reason codes (see classifyKiroFailure). We deliberately do NOT remap the
 			// token-expired 403 to 401: a 401 marks the auth as an unauthorized failure
 			// (hasUnauthorizedAuthFailure) and permanently blocks the host's auto-refresh
 			// loop. Token freshness is kept proactively via NextRefreshAfter (set at
 			// parse/refresh time), so a healthy credential never reaches this branch.
-			return nil, wire.ErrorStatus("upstream_status", fmt.Sprintf("kiro generateAssistantResponse HTTP %d: %s", resp.StatusCode, truncate(string(resp.Body), 300)), resp.StatusCode), nil
+			return nil, classifyKiroFailure(resp.StatusCode, resp.Body).envelope(), nil
 		}
 
-		text, calls := aggregateEvents(parseEventStreamFrames(resp.Body), maps)
+		events, usage, failure := parseEventStreamResponse(resp.Body)
+		if failure != nil {
+			return nil, failure.envelope(), nil
+		}
+		text, calls := aggregateEvents(events, maps)
 		lastResult = &kiroExecResult{
 			text:           text,
 			calls:          calls,
 			model:          model,
 			requestPayload: req.Payload,
+			usage:          usage,
 		}
 		if strings.TrimSpace(text) != "" || len(calls) > 0 {
 			return lastResult, nil, nil
+		}
+		if usage.contextOverflow() {
+			return nil, contextWindowFull(usage).envelope(), nil
 		}
 		// Empty result: retry with a fresh request unless attempts are exhausted.
 	}
@@ -136,6 +146,7 @@ func executeKiro(request []byte) ([]byte, error) {
 	}
 
 	message := aggregateToClaudeMessage(res.text, res.calls, res.model, res.requestPayload)
+	source := message.applyUsage(&res.usage)
 	payload, errMarshalResp := json.Marshal(message)
 	if errMarshalResp != nil {
 		return nil, fmt.Errorf("encode claude response: %w", errMarshalResp)
@@ -143,16 +154,8 @@ func executeKiro(request []byte) ([]byte, error) {
 
 	return wire.OK(pluginapi.ExecutorResponse{
 		Payload: payload,
-		Headers: estimatedUsageHeaders("application/json"),
+		Headers: usageHeaders("application/json", source, &res.usage),
 	})
-}
-
-func estimatedUsageHeaders(contentType string) http.Header {
-	return http.Header{
-		"Content-Type":           {contentType},
-		"X-Kiro-Token-Usage":     {"estimated"},
-		"X-Kiro-Token-Estimator": {"utf8-bytes-div4"},
-	}
 }
 
 // kiroRequestHeaders builds the AWS/KiroIDE headers required by CodeWhisperer.

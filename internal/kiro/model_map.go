@@ -322,6 +322,7 @@ func availableModelsToPluginModels(available []availableModel) []pluginapi.Model
 		seen[clientID] = struct{}{}
 
 		inputLimit := item.TokenLimits.MaxInputTokens
+		rememberContextWindow(nativeID, clientID, inputLimit)
 		if inputLimit <= 0 {
 			inputLimit = defaultModelInputTokenLimit
 		}

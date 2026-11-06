@@ -73,3 +73,27 @@ transport keepalives must provide their own bounded SSE heartbeat handling. Our
 Codex adapter relays real streams and emits status-only progress events during gaps;
 its 360-second upstream read timeout remains independent of those heartbeats.
 No tool call, assistant text, or completion is invented by a heartbeat.
+
+## Usage events and context overflow
+
+Kiro usage events are parsed when present: `metadataEvent`/`messageMetadataEvent`
+`tokenUsage` (provider counts: uncached input, output, cache read/write),
+`contextUsageEvent.contextUsagePercentage`, and `meteringEvent` credits. Input
+tokens prefer provider counts, then percentage x model context window (catalogue
+`maxInputTokens`, else known 1M models, else 200k), then the bytes/4 estimate.
+Final counts are sent in the Anthropic `message_delta` usage and the non-stream
+response. Non-stream `X-Kiro-Token-Usage` is `provider`, `context-percentage` or
+`estimated`; streaming headers are fixed before any Kiro event, so they always
+say `estimated` and the `message_delta` usage is authoritative. Credits appear
+only as `X-Kiro-Credits`/`X-Kiro-Credit-Unit` on non-stream responses, never as
+tokens. The live event shapes were taken from reference implementations and have
+not been re-probed against Kiro in this fork.
+
+`message_start` is deferred until the first content, reasoning, tool or usage
+event; pings start only after it. An upstream error before that point closes the
+stream with a structured HTTP error; after it, an Anthropic `error` SSE event is
+emitted first. `CONTENT_LENGTH_EXCEEDS_THRESHOLD`, "Input is too long", or an
+empty turn at contextUsagePercentage >= 100 becomes HTTP 400
+`invalid_request_error` "prompt is too long: ...". `MONTHLY_REQUEST_COUNT` is 429
+with Retry-After to the next UTC month, capacity/rate reasons are retryable
+503/429, and the blocked-account 403 is labelled; token-expiry 403 stays 403.

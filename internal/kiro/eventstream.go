@@ -30,6 +30,16 @@ type framePayload struct {
 	Input          json.RawMessage `json:"input"`
 	Stop           bool            `json:"stop"`
 	FollowupPrompt json.RawMessage `json:"followupPrompt"`
+
+	// Usage-bearing events (metadataEvent, messageMetadataEvent, contextUsageEvent,
+	// meteringEvent). Kept raw so an unexpected shape never fails the frame.
+	TokenUsage             json.RawMessage `json:"tokenUsage"`
+	MetadataEvent          json.RawMessage `json:"metadataEvent"`
+	MessageMetadataEvent   json.RawMessage `json:"messageMetadataEvent"`
+	ContextUsagePercentage json.RawMessage `json:"contextUsagePercentage"`
+	Unit                   string          `json:"unit"`
+	UnitPlural             string          `json:"unitPlural"`
+	Usage                  json.RawMessage `json:"usage"`
 }
 
 // parseEventStreamFrames decodes an AWS event-stream response body into events.
@@ -37,6 +47,14 @@ type framePayload struct {
 // all big-endian. The event type is read from the frame's :event-type header, with a
 // payload-shape fallback for frames without it.
 func parseEventStreamFrames(buffer []byte) []cwEvent {
+	events, _, _ := parseEventStreamResponse(buffer)
+	return events
+}
+
+// parseEventStreamResponse is parseEventStreamFrames plus usage events and the
+// first in-band exception frame, which stops decoding.
+func parseEventStreamResponse(buffer []byte) ([]cwEvent, kiroUsage, *kiroFailure) {
+	var usage kiroUsage
 	events := make([]cwEvent, 0, 16)
 	offset := 0
 	for {
@@ -63,9 +81,16 @@ func parseEventStreamFrames(buffer []byte) []cwEvent {
 		eventType := readEventTypeHeader(buffer, headersStart, headersLen)
 		payload := buffer[payloadStart:payloadEnd]
 		offset += totalLen
+		if h, err := decodeFrameHeaders(buffer[headersStart:payloadStart]); err == nil && isExceptionFrame(h) {
+			return events, usage, classifyStreamException(h, payload)
+		}
 
 		var parsed framePayload
 		if err := json.Unmarshal(payload, &parsed); err != nil {
+			continue
+		}
+		if isUsageEvent(eventType) {
+			usage.observe(eventType, parsed)
 			continue
 		}
 
@@ -73,7 +98,7 @@ func parseEventStreamFrames(buffer []byte) []cwEvent {
 			events = append(events, ev...)
 		}
 	}
-	return events
+	return events, usage, nil
 }
 
 // classifyFrame maps an event type + payload to zero or more cwEvents.

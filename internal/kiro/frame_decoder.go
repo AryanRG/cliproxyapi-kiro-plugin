@@ -47,8 +47,8 @@ func (d *frameDecoder) feed(chunk []byte, consume func(string, framePayload) err
 		if err != nil {
 			return err
 		}
-		if h[":message-type"] == "exception" || h[":message-type"] == "error" || h[":exception-type"] != "" || strings.HasSuffix(h[":event-type"], "Exception") {
-			return fmt.Errorf("upstream_event_error")
+		if isExceptionFrame(h) {
+			return classifyStreamException(h, frame[12+headers:total-4])
 		}
 		var payload framePayload
 		if json.Unmarshal(frame[12+headers:total-4], &payload) != nil {
@@ -60,6 +60,9 @@ func (d *frameDecoder) feed(chunk []byte, consume func(string, framePayload) err
 		d.pending = nil
 	}
 	return nil
+}
+func isExceptionFrame(h map[string]string) bool {
+	return h[":message-type"] == "exception" || h[":message-type"] == "error" || h[":exception-type"] != "" || h[":error-code"] != "" || strings.HasSuffix(h[":event-type"], "Exception")
 }
 func (d *frameDecoder) finish() error {
 	if len(d.pending) != 0 {

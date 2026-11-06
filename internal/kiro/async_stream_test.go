@@ -26,11 +26,16 @@ type fakeStreamHost struct {
 	reads     int
 	closes    int
 	failEmit  bool
+	status    int    // do_stream status; 0 means 200
+	errBody   []byte // body served for a non-2xx status
+	reading   chan struct{}
+	readOnce  sync.Once
+	closeMsg  chan map[string]any
 }
 
 func installStreamHost(t *testing.T) *fakeStreamHost {
 	t.Helper()
-	h := &fakeStreamHost{chunks: make(chan hostapi.HTTPChunk, 32), emitted: make(chan []byte, 128), closed: make(chan string, 1), cancelled: make(chan struct{})}
+	h := &fakeStreamHost{chunks: make(chan hostapi.HTTPChunk, 32), emitted: make(chan []byte, 128), closed: make(chan string, 1), cancelled: make(chan struct{}), reading: make(chan struct{}), closeMsg: make(chan map[string]any, 1)}
 	old := hostapi.HostCall
 	hostapi.HostCall = h.call
 	t.Cleanup(func() { hostapi.HostCall = old })
@@ -53,12 +58,20 @@ func (h *fakeStreamHost) call(method string, body []byte) ([]byte, error) {
 	case "host.http.do_stream":
 		h.mu.Lock()
 		h.opens++
+		status := h.status
 		h.mu.Unlock()
+		if status != 0 {
+			return wire.OK(hostapi.HTTPStream{StatusCode: status, StreamID: "err"})
+		}
 		return wire.OK(hostapi.HTTPStream{StatusCode: 200, StreamID: "up"})
 	case "host.http.stream_read":
 		h.mu.Lock()
 		h.reads++
 		h.mu.Unlock()
+		if strings.Contains(string(body), `"err"`) {
+			return wire.OK(hostapi.HTTPChunk{Payload: h.errBody, Done: true})
+		}
+		h.readOnce.Do(func() { close(h.reading) })
 		select {
 		case c := <-h.chunks:
 			return wire.OK(c)
@@ -89,6 +102,14 @@ func (h *fakeStreamHost) call(method string, body []byte) ([]byte, error) {
 		h.emitted <- req.Payload
 		return wire.OK(map[string]any{})
 	case "host.stream.close":
+		var full struct {
+			Detail map[string]any `json:"error_detail"`
+		}
+		_ = json.Unmarshal(body, &full)
+		select {
+		case h.closeMsg <- full.Detail:
+		default:
+		}
 		h.closed <- req.Detail.Code
 		return wire.OK(map[string]any{})
 	default:
@@ -106,6 +127,14 @@ func (h *fakeStreamHost) waitEvent(t *testing.T, kind string) []byte {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("missing %s", kind)
 		}
+	}
+}
+func (h *fakeStreamHost) waitReading(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.reading:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream not read")
 	}
 }
 func (h *fakeStreamHost) waitClose(t *testing.T) string {
@@ -132,7 +161,6 @@ var testStreamPolicy = streamPolicy{time.Second, 3 * time.Second, 100 * time.Mil
 func TestStreamEmitsBeforeUpstreamEOF(t *testing.T) {
 	h := installStreamHost(t)
 	done := startFakeStream(h, context.Background(), testStreamPolicy)
-	h.waitEvent(t, "message_start")
 	frame := encodeFrame("assistantResponseEvent", `{"content":"Hello café 🌍"}`)
 	for i := 0; i < len(frame); i += 7 {
 		end := i + 7
@@ -165,7 +193,7 @@ func TestStreamCancellationClosesUpstreamWithoutReplay(t *testing.T) {
 	h := installStreamHost(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := startFakeStream(h, ctx, testStreamPolicy)
-	h.waitEvent(t, "message_start")
+	h.waitReading(t)
 	cancel()
 	if code := h.waitClose(t); code != "stream_cancelled_or_deadline" {
 		t.Fatal(code)
@@ -192,7 +220,6 @@ func TestStreamTruncationAndUpstreamErrorAreNotSuccess(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			h := installStreamHost(t)
 			done := startFakeStream(h, context.Background(), testStreamPolicy)
-			h.waitEvent(t, "message_start")
 			frame := encodeFrame("assistantResponseEvent", `{"content":"partial"}`)
 			switch mode {
 			case "truncated":
@@ -229,6 +256,7 @@ func TestStreamTruncationAndUpstreamErrorAreNotSuccess(t *testing.T) {
 func TestStreamHeartbeatAndIdleDeadline(t *testing.T) {
 	h := installStreamHost(t)
 	done := startFakeStream(h, context.Background(), streamPolicy{80 * time.Millisecond, time.Second, 10 * time.Millisecond})
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("assistantResponseEvent", `{"content":"x"}`)}
 	h.waitEvent(t, "ping")
 	if code := h.waitClose(t); code != "upstream_idle_timeout" {
 		t.Fatal(code)
@@ -238,7 +266,8 @@ func TestStreamHeartbeatAndIdleDeadline(t *testing.T) {
 func TestStreamDownstreamFailureCancelsReader(t *testing.T) {
 	h := installStreamHost(t)
 	done := startFakeStream(h, context.Background(), testStreamPolicy)
-	h.waitEvent(t, "message_start")
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("assistantResponseEvent", `{"content":"x"}`)}
+	h.waitEvent(t, "content_block_delta")
 	h.mu.Lock()
 	h.failEmit = true
 	h.mu.Unlock()
@@ -339,7 +368,7 @@ func TestExecutorAsyncReturnsAndQuiesces(t *testing.T) {
 	if json.Unmarshal(result, &env) != nil || !env.OK {
 		t.Fatal(string(result))
 	}
-	h.waitEvent(t, "message_start")
+	h.waitReading(t)
 	ShutdownStreams()
 	if code := h.waitClose(t); code != "stream_cancelled_or_deadline" {
 		t.Fatal(code)

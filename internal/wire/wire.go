@@ -19,6 +19,9 @@ type EnvelopeError struct {
 	Code       string `json:"code"`
 	Message    string `json:"message"`
 	HTTPStatus int    `json:"http_status,omitempty"`
+	// Retryable and RetryAfterSeconds are optional hints; older hosts ignore them.
+	Retryable         bool `json:"retryable,omitempty"`
+	RetryAfterSeconds int  `json:"retry_after_seconds,omitempty"`
 }
 
 // OK marshals v as the result payload of a successful envelope.
@@ -40,5 +43,11 @@ func Error(code, message string) []byte {
 // to drive retry/refresh scheduling.
 func ErrorStatus(code, message string, status int) []byte {
 	raw, _ := json.Marshal(Envelope{OK: false, Error: &EnvelopeError{Code: code, Message: message, HTTPStatus: status}})
+	return raw
+}
+
+// ErrorDetail returns an error envelope carrying the full structured error.
+func ErrorDetail(e EnvelopeError) []byte {
+	raw, _ := json.Marshal(Envelope{OK: false, Error: &e})
 	return raw
 }

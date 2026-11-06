@@ -66,3 +66,16 @@ func StreamClose(id, code string) error {
 	}
 	return invoke(pluginabi.MethodHostStreamClose, req, nil)
 }
+
+// StreamCloseError closes a stream with a classified error. Hosts that have not
+// yet written response headers surface the status to the client.
+func StreamCloseError(id, code, message string, status, retryAfterSeconds int, retryable bool) error {
+	detail := map[string]any{"code": code, "http_status": status, "message": message}
+	if retryAfterSeconds > 0 {
+		detail["retry_after_seconds"] = retryAfterSeconds
+	}
+	if retryable {
+		detail["retryable"] = true
+	}
+	return invoke(pluginabi.MethodHostStreamClose, map[string]any{"stream_id": id, "error_detail": detail}, nil)
+}

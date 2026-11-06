@@ -20,8 +20,23 @@ type toolCall struct {
 
 // claudeUsage is the token accounting block of a Claude message.
 type claudeUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int  `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// applyUsage replaces the byte estimates with provider or context-percentage
+// counts when Kiro reported them, and returns the input-token source.
+func (m *claudeResponse) applyUsage(u *kiroUsage) string {
+	in, source := u.inputTokens(m.Model, m.Usage.InputTokens)
+	m.Usage.InputTokens = in
+	m.Usage.OutputTokens = u.outputTokens(m.Usage.OutputTokens)
+	if u.haveTokens {
+		read, write := u.cacheRead, u.cacheWrite
+		m.Usage.CacheReadInputTokens, m.Usage.CacheCreationInputTokens = &read, &write
+	}
+	return source
 }
 
 // claudeResponse is a non-streaming Claude Messages response.

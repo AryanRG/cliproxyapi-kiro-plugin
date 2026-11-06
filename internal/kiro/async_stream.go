@@ -3,6 +3,7 @@ package kiro
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync"
@@ -100,29 +101,46 @@ func executeKiroStream(request []byte) ([]byte, error) {
 		defer func() { activeStreams.Lock(); delete(activeStreams.jobs, job); activeStreams.Unlock(); close(job.done) }()
 		runKiroStream(ctx, req.StreamID, op, httpReq, model, estimateTokens(len(req.Payload)), maps, productionStreamPolicy)
 	}()
-	return wire.OK(executorStreamResponse{Headers: estimatedUsageHeaders("text/event-stream")})
+	// Stream headers precede every Kiro event, so they can only name the
+	// fallback source. Final provider or context-percentage counts, when Kiro
+	// sends them, are reported in the message_delta usage.
+	return wire.OK(executorStreamResponse{Headers: usageHeaders("text/event-stream", usageSourceEstimated, nil)})
 }
 
 func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRequest, model string, inputTokens int, maps *toolNameMaps, policy streamPolicy) {
 	ctx, cancel := context.WithTimeout(parent, policy.total)
 	code := "stream_interrupted"
+	var failure *kiroFailure
+	var message *incrementalMessage
+	fail := func(err error) {
+		if errors.As(err, &failure) {
+			code = failure.Code
+			return
+		}
+		code = err.Error()
+	}
 	defer func() {
 		if recover() != nil {
-			code = "stream_internal_error"
+			code, failure = "stream_internal_error", nil
 		}
 		cancel()
 		_ = hostapi.CancelOperation(request.HostCallbackID, op)
+		if failure != nil {
+			// Before message_start the host can still answer with the HTTP
+			// status; afterwards the client also gets an Anthropic error event.
+			if message != nil && message.started {
+				_ = hostapi.StreamEmit(id, failure.sseEvent())
+			}
+			_ = hostapi.StreamCloseError(id, failure.Code, failure.Message, failure.Status, failure.RetryAfter, failure.Retryable)
+			return
+		}
 		if !regexp.MustCompile(`^[a-z0-9_]{0,80}$`).MatchString(code) {
 			code = "stream_write_or_decode_failed"
 		}
 		_ = hostapi.StreamClose(id, code)
 	}()
 	emit := func(b []byte) error { return hostapi.StreamEmit(id, b) }
-	message, err := newIncrementalMessage(model, inputTokens, maps, emit)
-	if err != nil {
-		code = "client_disconnected"
-		return
-	}
+	message, _ = newIncrementalMessage(model, inputTokens, maps, emit)
 	parts := make(chan streamInput, 1)
 	readerDone := make(chan struct{})
 	go func() {
@@ -149,7 +167,7 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 			defer hostapi.HTTPStreamClose(up.StreamID)
 		}
 		if up.StatusCode < 200 || up.StatusCode >= 300 {
-			send(streamInput{err: fmt.Errorf("upstream_http_%d", up.StatusCode)})
+			send(streamInput{err: classifyKiroFailure(up.StatusCode, readErrorBody(up.StreamID))})
 			return
 		}
 		if up.StreamID == "" {
@@ -183,13 +201,14 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 			code = "upstream_idle_timeout"
 			return
 		case <-heartbeat.C:
-			if message.event("ping", map[string]any{}) != nil {
+			// No ping before message_start: it would commit the response early.
+			if message.started && message.event("ping", map[string]any{}) != nil {
 				code = "client_disconnected"
 				return
 			}
 		case p := <-parts:
 			if p.err != nil {
-				code = p.err.Error()
+				fail(p.err)
 				return
 			}
 			if len(p.payload) > 0 {
@@ -206,17 +225,17 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 					return
 				}
 				if err := decoder.feed(p.payload, message.consume); err != nil {
-					code = err.Error()
+					fail(err)
 					return
 				}
 			}
 			if p.done {
 				if err := decoder.finish(); err != nil {
-					code = err.Error()
+					fail(err)
 					return
 				}
 				if err := message.finish(); err != nil {
-					code = err.Error()
+					fail(err)
 					return
 				}
 				code = ""
@@ -224,4 +243,23 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 			}
 		}
 	}
+}
+
+// readErrorBody reads at most 4 KiB of a non-2xx upstream body for classification.
+func readErrorBody(streamID string) []byte {
+	var body []byte
+	for streamID != "" && len(body) < 4096 {
+		chunk, err := hostapi.HTTPStreamRead(streamID)
+		if err != nil || chunk.Error != "" {
+			break
+		}
+		body = append(body, chunk.Payload...)
+		if chunk.Done {
+			break
+		}
+	}
+	if len(body) > 4096 {
+		body = body[:4096]
+	}
+	return body
 }
