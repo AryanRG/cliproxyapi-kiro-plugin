@@ -65,9 +65,11 @@ func HandleMethod(method string, request []byte) ([]byte, error) {
 		return executeKiro(request)
 	case pluginabi.MethodExecutorExecuteStream:
 		return executeKiroStream(request)
-	case pluginabi.MethodExecutorCountTokens,
-		pluginabi.MethodExecutorHTTPRequest:
-		return wire.ErrorStatus("not_implemented", "count-tokens/http-request are not implemented yet", http.StatusNotImplemented), nil
+	case pluginabi.MethodExecutorCountTokens:
+		// Local o200k estimate; Kiro has no count endpoint (see token_count.go).
+		return countKiroTokens(request)
+	case pluginabi.MethodExecutorHTTPRequest:
+		return wire.ErrorStatus("not_implemented", "http-request is not implemented", http.StatusNotImplemented), nil
 
 	// ---- management API ----
 	case pluginabi.MethodManagementRegister:
@@ -86,7 +88,7 @@ func kiroRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerKiro,
-			Version:          "0.3.0-local.4",
+			Version:          "0.4.0-local.1",
 			Author:           "xiaokui-dev",
 			GitHubRepository: "https://github.com/xiaokui-dev/cliproxyapi-kiro-plugin",
 			ConfigFields: []pluginapi.ConfigField{

@@ -162,3 +162,82 @@ func TestBuildHistorySystemPreservesFirstImage(t *testing.T) {
 		t.Fatalf("unexpected system/image content: %q", first.Content)
 	}
 }
+
+func TestBuildToolResultImages(t *testing.T) {
+	cases := []struct {
+		name        string
+		content     string
+		wantText    string
+		wantFormats []string
+		wantData    []string
+	}{
+		{"mixed", `[{"type":"text","text":"before"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}},{"type":"text","text":"after"}]`, "beforeafter", []string{"png"}, []string{"cG5n"}},
+		{"image only", `[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"anBlZw=="}}]`, "", []string{"jpeg"}, []string{"anBlZw=="}},
+		{"multiple images", `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"anBlZw=="}}]`, "", []string{"png", "jpeg"}, []string{"cG5n", "anBlZw=="}},
+		{"invalid images", `[{"type":"image"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":""}},{"type":"image","source":{"type":"base64","media_type":"","data":"cG5n"}},{"type":"image","source":{"type":"url","url":"https://example.com/image.png"}},{"type":"text","text":"kept"}]`, "kept", nil, nil},
+		{"plain text", `"unchanged"`, "unchanged", nil, nil},
+		{"empty", `[]`, "", nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := buildFromJSON(t, `{"model":"claude-opus-5-5","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"screenshot","content":`+tc.content+`}]}]}`, kiroCredential{})
+			cur := req.ConversationState.CurrentMessage.UserInputMessage
+			if cur.Content != "Tool results provided." {
+				t.Fatalf("unexpected message content: %q", cur.Content)
+			}
+			if len(cur.Images) != len(tc.wantFormats) {
+				t.Fatalf("got %d images, want %d", len(cur.Images), len(tc.wantFormats))
+			}
+			for i, img := range cur.Images {
+				if img.Format != tc.wantFormats[i] || img.Source.Bytes != tc.wantData[i] {
+					t.Fatalf("image %d: %+v", i, img)
+				}
+			}
+			results := cur.UserInputMessageContext.ToolResults
+			if len(results) != 1 || results[0].ToolUseID != "screenshot" || results[0].Status != "success" || len(results[0].Content) != 1 || results[0].Content[0].Text != tc.wantText {
+				t.Fatalf("tool result changed: %+v", results)
+			}
+		})
+	}
+}
+
+func TestBuildToolResultImagesInHistory(t *testing.T) {
+	req := buildFromJSON(t, `{
+		"model":"claude-opus-5-5","system":"Remember screenshots.",
+		"messages":[
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"screenshot","content":[{"type":"text","text":"Captured."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]}]},
+			{"role":"assistant","content":"I see it."},
+			{"role":"user","content":"Describe it again."}
+		]
+	}`, kiroCredential{})
+	first := req.ConversationState.History[0].UserInputMessage
+	if first == nil || len(first.Images) != 1 || first.Images[0].Source.Bytes != "cG5n" || first.Content != "Remember screenshots.\n\nTool results provided." {
+		t.Fatalf("history lost screenshot: %+v", first)
+	}
+	if got := first.UserInputMessageContext.ToolResults[0]; got.ToolUseID != "screenshot" || got.Content[0].Text != "Captured." {
+		t.Fatalf("history tool result changed: %+v", got)
+	}
+	if len(req.ConversationState.CurrentMessage.UserInputMessage.Images) != 0 {
+		t.Fatal("history screenshot leaked into current message")
+	}
+}
+
+func TestBuildToolResultImagesDedupAndDirectImage(t *testing.T) {
+	req := buildFromJSON(t, `{
+		"model":"claude-opus-5-5",
+		"messages":[{"role":"user","content":[
+			{"type":"image","source":{"type":"base64","media_type":"image/png","data":"ZGlyZWN0"}},
+			{"type":"tool_result","tool_use_id":"screenshot","content":[{"type":"text","text":"first"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"Zmlyc3Q="}}]},
+			{"type":"tool_result","tool_use_id":"screenshot","content":[{"type":"text","text":"duplicate"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"ZHVwbGljYXRl"}}]},
+			{"type":"tool_result","tool_use_id":"other","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"b3RoZXI="}}]}
+		]}]
+	}`, kiroCredential{})
+	cur := req.ConversationState.CurrentMessage.UserInputMessage
+	if len(cur.Images) != 3 || cur.Images[0].Source.Bytes != "ZGlyZWN0" || cur.Images[1].Source.Bytes != "Zmlyc3Q=" || cur.Images[2].Source.Bytes != "b3RoZXI=" {
+		t.Fatalf("unexpected image order or duplicate: %+v", cur.Images)
+	}
+	results := cur.UserInputMessageContext.ToolResults
+	if len(results) != 2 || results[0].Content[0].Text != "first" || results[1].ToolUseID != "other" {
+		t.Fatalf("dedup policy changed: %+v", results)
+	}
+}

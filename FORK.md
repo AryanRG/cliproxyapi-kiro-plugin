@@ -12,6 +12,7 @@ Upstream base: `xiaokui-dev/cliproxyapi-kiro-plugin` at `f7b60a605c3613c18e4011b
 - Reject unsupported controls before inference instead of silently discarding them.
 - Expose read-only per-account plan credits through the standard quota RPC on compatible CLIProxy v8 hosts.
 - Preserve dotted Kiro model IDs. Hyphenated Claude account routes are distinct.
+- 0.4.0-local.1: use Kiro usage events (provider tokens, else context percentage x discovered context window) for reported usage; map context overflow to HTTP 400 "prompt is too long" so clients can compact; classify quota/capacity/blocked errors; estimate `count_tokens` locally (o200k BPE); keep images returned by tools.
 
 ## Compatibility contract
 
@@ -97,3 +98,11 @@ empty turn at contextUsagePercentage >= 100 becomes HTTP 400
 `invalid_request_error` "prompt is too long: ...". `MONTHLY_REQUEST_COUNT` is 429
 with Retry-After to the next UTC month, capacity/rate reasons are retryable
 503/429, and the blocked-account 403 is labelled; token-expiry 403 stays 403.
+
+## Count tokens
+
+`executor.count_tokens` returns `{"input_tokens":N}` computed locally with the
+o200k_base BPE (pure Go, vocabulary compiled in, works offline) plus
+Anthropic's documented image estimate. Kiro has no count endpoint, and the
+Anthropic tokenizer differs, so this is an estimate (`X-Kiro-Token-Usage:
+estimated`, `X-Kiro-Token-Estimator: o200k-bpe`), not a provider count.

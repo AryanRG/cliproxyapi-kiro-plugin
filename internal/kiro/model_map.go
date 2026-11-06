@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
@@ -89,12 +90,26 @@ func clientKiroModelID(id string) string {
 	return id
 }
 
+// fallbackModelInputTokenLimit applies documented Kiro limits when account
+// discovery fails or omits token limits. Unknown models retain the conservative
+// default; positive account-reported limits always take precedence.
+func fallbackModelInputTokenLimit(id string) int64 {
+	// https://kiro.dev/docs/models/ (verified 2026-10-04).
+	// Only the dotted native ID is a Kiro route; "claude-opus-5-5" is a distinct
+	// (non-Kiro) Claude account route in this fork and keeps the default.
+	if strings.TrimSpace(id) == "claude-opus-5.5" {
+		return 1000000
+	}
+	return defaultModelInputTokenLimit
+}
+
 // kiroModels builds the ModelInfo list advertised to the host registry. It is
 // retained for static compatibility, while model.for_auth uses the account's
 // management response below.
 func kiroModels() []pluginapi.ModelInfo {
 	models := make([]pluginapi.ModelInfo, 0, len(kiroModelIDs))
 	for _, id := range kiroModelIDs {
+		inputLimit := fallbackModelInputTokenLimit(id)
 		models = append(models, pluginapi.ModelInfo{
 			ID:                         id,
 			Object:                     "model",
@@ -103,9 +118,9 @@ func kiroModels() []pluginapi.ModelInfo {
 			DisplayName:                id,
 			Name:                       id,
 			SupportedGenerationMethods: []string{"generateContent"},
-			InputTokenLimit:            defaultModelInputTokenLimit,
+			InputTokenLimit:            inputLimit,
 			OutputTokenLimit:           defaultModelOutputTokenLimit,
-			ContextLength:              defaultModelInputTokenLimit,
+			ContextLength:              inputLimit,
 			MaxCompletionTokens:        defaultModelOutputTokenLimit,
 		})
 	}
@@ -307,6 +322,52 @@ func discoverProfileArn(cred kiroCredential, callbackID, region string) string {
 	return ""
 }
 
+// discoveredContextWindows remembers positive maxInputTokens values reported by
+// ListAvailableModels, keyed by both client and native IDs. Limits are model
+// properties, so the last reported value wins across accounts.
+var discoveredContextWindows = struct {
+	sync.RWMutex
+	limits map[string]int64
+}{limits: map[string]int64{}}
+
+func rememberContextWindow(clientID, nativeID string, limit int64) {
+	if limit <= 0 {
+		return
+	}
+	discoveredContextWindows.Lock()
+	discoveredContextWindows.limits[clientID] = limit
+	discoveredContextWindows.limits[nativeID] = limit
+	discoveredContextWindows.Unlock()
+}
+
+func resetDiscoveredContextWindows() {
+	discoveredContextWindows.Lock()
+	discoveredContextWindows.limits = map[string]int64{}
+	discoveredContextWindows.Unlock()
+}
+
+// contextWindowForModel returns the input context window for a client or
+// native Kiro model ID: the account-reported maxInputTokens when discovery has
+// seen the model, else the documented fallback (1M for Opus 5.5), else 200K.
+func contextWindowForModel(model string) int64 {
+	if limit, ok := discoveredContextWindow(model); ok {
+		return limit
+	}
+	return fallbackModelInputTokenLimit(strings.TrimSpace(model))
+}
+
+// discoveredContextWindow returns the account-reported limit, if any.
+func discoveredContextWindow(model string) (int64, bool) {
+	id := strings.TrimSpace(model)
+	discoveredContextWindows.RLock()
+	limit, ok := discoveredContextWindows.limits[id]
+	if !ok {
+		limit, ok = discoveredContextWindows.limits[resolveKiroModel(id)]
+	}
+	discoveredContextWindows.RUnlock()
+	return limit, ok && limit > 0
+}
+
 func availableModelsToPluginModels(available []availableModel) []pluginapi.ModelInfo {
 	models := make([]pluginapi.ModelInfo, 0, len(available))
 	seen := make(map[string]struct{}, len(available))
@@ -322,9 +383,9 @@ func availableModelsToPluginModels(available []availableModel) []pluginapi.Model
 		seen[clientID] = struct{}{}
 
 		inputLimit := item.TokenLimits.MaxInputTokens
-		rememberContextWindow(nativeID, clientID, inputLimit)
+		rememberContextWindow(clientID, nativeID, inputLimit)
 		if inputLimit <= 0 {
-			inputLimit = defaultModelInputTokenLimit
+			inputLimit = fallbackModelInputTokenLimit(clientID)
 		}
 		outputLimit := item.TokenLimits.MaxOutputTokens
 		if outputLimit <= 0 {

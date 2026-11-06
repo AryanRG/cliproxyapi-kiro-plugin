@@ -350,3 +350,64 @@ func TestClientKiroModelID(t *testing.T) {
 		}
 	}
 }
+
+// TestOpus55FallbackContextLimit covers RVZO6 8c6a107 adapted to this fork:
+// Opus 5.5 keeps its dotted ID (FORK.md); the hyphenated spelling is a distinct
+// non-Kiro route and keeps the generic default.
+func TestOpus55FallbackContextLimit(t *testing.T) {
+	resetDiscoveredContextWindows()
+	t.Cleanup(resetDiscoveredContextWindows)
+	if got := fallbackModelInputTokenLimit("claude-opus-5.5"); got != 1000000 {
+		t.Fatalf("fallback limit = %d, want 1000000", got)
+	}
+	if got := contextWindowForModel("claude-opus-5.5"); got != 1000000 {
+		t.Fatalf("contextWindowForModel = %d, want 1000000", got)
+	}
+	if got := fallbackModelInputTokenLimit("claude-opus-5-5"); got != defaultModelInputTokenLimit {
+		t.Fatalf("hyphen route limit = %d", got)
+	}
+	if got := clientKiroModelID("claude-opus-5.5"); got != "claude-opus-5.5" {
+		t.Fatalf("dotted Opus 5.5 ID rewritten to %q", got)
+	}
+	for _, model := range kiroModels() {
+		want := fallbackModelInputTokenLimit(model.ID)
+		if model.ContextLength != want || model.InputTokenLimit != want {
+			t.Fatalf("unexpected static context for %q: %+v", model.ID, model)
+		}
+	}
+	for _, limit := range []int64{0, -1, 200000, 750000, 1000000} {
+		models := availableModelsToPluginModels([]availableModel{{ModelID: "claude-opus-5.5", TokenLimits: tokenLimits{MaxInputTokens: limit, MaxOutputTokens: 12345}}})
+		want := limit
+		if want <= 0 {
+			want = 1000000
+		}
+		if len(models) != 1 || models[0].ID != "claude-opus-5.5" || models[0].InputTokenLimit != want || models[0].ContextLength != want || models[0].OutputTokenLimit != 12345 {
+			t.Fatalf("account limit %d not respected: %+v", limit, models)
+		}
+	}
+	if got := fallbackModelInputTokenLimit("unknown-model"); got != defaultModelInputTokenLimit {
+		t.Fatalf("unknown model limit changed: %d", got)
+	}
+}
+
+func TestContextWindowForModelUsesDiscoveredLimits(t *testing.T) {
+	resetDiscoveredContextWindows()
+	t.Cleanup(resetDiscoveredContextWindows)
+	if got := contextWindowForModel("claude-sonnet-4-6"); got != defaultModelInputTokenLimit {
+		t.Fatalf("default = %d", got)
+	}
+	availableModelsToPluginModels([]availableModel{
+		{ModelID: "claude-sonnet-4.6", TokenLimits: tokenLimits{MaxInputTokens: 1000000}},
+		{ModelID: "deepseek-3.2", TokenLimits: tokenLimits{MaxInputTokens: 128000}},
+	})
+	for id, want := range map[string]int64{
+		"claude-sonnet-4-6": 1000000, // client ID
+		"claude-sonnet-4.6": 1000000, // native ID
+		"deepseek-3.2":      128000,
+		"":                  defaultModelInputTokenLimit,
+	} {
+		if got := contextWindowForModel(id); got != want {
+			t.Errorf("contextWindowForModel(%q) = %d, want %d", id, got, want)
+		}
+	}
+}

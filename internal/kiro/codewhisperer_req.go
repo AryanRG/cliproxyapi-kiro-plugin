@@ -333,11 +333,26 @@ func buildUserInputMessage(blocks []claudeBlock, model string, maps *toolNameMap
 	var content strings.Builder
 	toolResults := make([]cwToolResult, 0)
 	images := make([]cwImage, 0)
+	seenToolResults := make(map[string]struct{})
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
 			content.WriteString(b.Text)
 		case "tool_result":
+			// Match the first-result-wins policy for text and images alike.
+			if _, seen := seenToolResults[b.ToolUseID]; seen {
+				continue
+			}
+			seenToolResults[b.ToolUseID] = struct{}{}
+			// CodeWhisperer tool results support text only. Preserve screenshots
+			// alongside the result on the enclosing user message instead.
+			for _, part := range blocksOf(b.Content) {
+				if part.Type == "image" {
+					if img, ok := toCWImage(part.Source); ok {
+						images = append(images, img)
+					}
+				}
+			}
 			toolResults = append(toolResults, cwToolResult{
 				Content:   []cwTextContent{{Text: contentToText(b.Content)}},
 				Status:    "success",

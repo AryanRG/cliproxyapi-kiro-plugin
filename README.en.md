@@ -8,6 +8,28 @@ A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that connec
 
 ## Build
 
+### Maintained fork
+
+Ryan's maintained fork is `RVZO6/cliproxyapi-kiro-plugin`, based on
+`xiaokui-dev/cliproxyapi-kiro-plugin` (the original MIT license and module path
+are retained). Custom patches should be built from this fork rather than
+overwritten with plugin-store binaries.
+
+Image blocks inside Claude `tool_result` content (including translated Codex
+browser screenshots and image-viewing results) are forwarded in the enclosing
+CodeWhisperer user message's `images` array. Tool-result text and call IDs are
+preserved; images remain attached to their original conversation turn, including
+history. Only inline base64 sources are supported; URL-only images are not fetched.
+
+The regression tests cover direct images, image-only/mixed tool results,
+multiple images, invalid sources, duplicate results, and conversation history.
+After installing a rebuilt library, restart CLIProxyAPI to load it.
+
+When account-scoped model discovery is unavailable, Opus 5.5 advertises the
+[documented Kiro 1M context window](https://kiro.dev/docs/models/) rather than
+the generic 200K fallback. Positive account-reported token limits still override
+this fallback. Other models and output limits are unchanged by this patch.
+
 ```bash
 gofmt -w .
 go test ./...

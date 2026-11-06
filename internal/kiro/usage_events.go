@@ -5,7 +5,6 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"sync"
 )
 
 // Token-usage provenance, reported in X-Kiro-Token-Usage.
@@ -160,30 +159,24 @@ func usageHeaders(contentType, source string, u *kiroUsage) http.Header {
 	return h
 }
 
-// modelContextWindows caches maxInputTokens from the account model catalogue,
-// keyed by both native (dotted) and client model IDs.
-var modelContextWindows sync.Map
-
-func rememberContextWindow(nativeID, clientID string, limit int64) {
-	if limit > 0 {
-		modelContextWindows.Store(nativeID, int(limit))
-		modelContextWindows.Store(clientID, int(limit))
-	}
-}
-
 // contextWindowFor resolves the context window used to convert
-// contextUsagePercentage into tokens: catalogue first, then known 1M models
-// (kiro.rs get_context_window_size), then the default.
+// contextUsagePercentage into tokens. It defers to contextWindowForModel
+// (account-reported maxInputTokens, then documented fallbacks); when that only
+// yields the generic default, known 1M models (kiro.rs
+// get_context_window_size) use 1M for this conversion. This does not change
+// the advertised catalogue limits.
 func contextWindowFor(model string) int {
-	for _, id := range []string{model, resolveKiroModel(model)} {
-		if v, ok := modelContextWindows.Load(id); ok {
-			return v.(int)
-		}
+	limit := contextWindowForModel(model)
+	if limit != defaultModelInputTokenLimit {
+		return int(limit)
+	}
+	if _, discovered := discoveredContextWindow(model); discovered {
+		return int(limit)
 	}
 	switch resolveKiroModel(model) {
 	case "claude-fable-5.1", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-5.5", "claude-opus-5",
 		"claude-sonnet-4.6", "claude-opus-4.6", "claude-opus-4.7", "claude-opus-4.8":
 		return 1_000_000
 	}
-	return int(defaultModelInputTokenLimit)
+	return int(limit)
 }
