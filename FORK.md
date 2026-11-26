@@ -148,3 +148,17 @@ identifiers are SHA-256 hashes. The ledger stores no message text, tool results
 or credentials. It is separate from the desktop console's managed database.
 A local write failure is logged and never causes inference to be repeated.
 Only requests processed while recording is enabled are covered.
+
+## Conversation identity
+
+Both executor paths reuse a conversation ID for an identified downstream chat.
+IDs are namespaced by the selected account and available caller scope. Worker
+identity separates a child from its parent. The request carries the supplied
+history on each turn, including the shortened history after compaction. Anonymous
+calls without a trustworthy session ID receive fresh UUIDs. Account rotation
+starts a different upstream conversation.
+
+Each ledger row has an independent attempt ID, even when requests or retries
+share a conversation. The migration adds a nullable `conversation_id` column.
+For 0.4.0-local.10 rows, the original conversation ID is the attempt ID.
+Session identifiers alone do not implement the native Kiro agent's Auto reviewer.

@@ -80,7 +80,7 @@ func executeKiroStream(request []byte) ([]byte, error) {
 	if err != nil {
 		return wire.ErrorStatus("kiro_profile_required", err.Error(), 400), nil
 	}
-	cw, maps := buildCodeWhispererRequest(creq, model, cred)
+	cw, maps := buildCodeWhispererRequest(creq, model, cred, conversationFor(req, creq))
 	cw.AdditionalModelRequestFields = controls
 	body, err := json.Marshal(cw)
 	if err != nil {
@@ -102,7 +102,7 @@ func executeKiroStream(request []byte) ([]byte, error) {
 	activeStreams.jobs[job] = struct{}{}
 	activeStreams.Unlock()
 	httpReq := hostapi.HTTPRequest{HostCallbackID: req.HostCallbackID, Method: "POST", URL: url, Headers: kiroRequestHeaders(cred), Body: body}
-	entry := creditAttempt{creditRequest: creditRequestFor(req, model, true), attemptID: cw.ConversationState.ConversationID}
+	entry := creditAttempt{creditRequest: creditRequestFor(req, model, true), attemptID: uuidV4(), conversationID: cw.ConversationState.ConversationID}
 	go func() {
 		defer func() { activeStreams.Lock(); delete(activeStreams.jobs, job); activeStreams.Unlock(); close(job.done) }()
 		runKiroStream(ctx, req.StreamID, op, httpReq, model, estimateClaudeRequest(&creq), maps, productionStreamPolicy, entry)

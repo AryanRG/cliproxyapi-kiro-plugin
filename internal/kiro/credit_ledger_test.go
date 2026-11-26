@@ -87,7 +87,17 @@ func TestLedgerRecordsRetryAndAbsentMeter(t *testing.T) {
 		}
 		return &hostapi.HTTPResponse{StatusCode: 200, Headers: http.Header{"X-Amzn-Requestid": []string{fmt.Sprint(calls)}}, Body: body}, nil
 	}
-	if _, err := executeKiro(nonStreamRequest(t)); err != nil {
+	var req executorRequest
+	if err := json.Unmarshal(nonStreamRequest(t), &req); err != nil {
+		t.Fatal(err)
+	}
+	req.AuthID = "test-account"
+	req.Headers = http.Header{"X-Session-Id": {"test-session"}}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeKiro(raw); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite3", path)
@@ -95,10 +105,10 @@ func TestLedgerRecordsRetryAndAbsentMeter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var attempts, reqs, reported, empty, complete int
+	var attempts, conversations, reqs, reported, empty, complete int
 	var debit float64
-	err = db.QueryRow(`SELECT count(*),count(distinct request_id),count(credits),sum(credits),sum(outcome='empty_response'),sum(outcome='completed' and credits is null) FROM kiro_requests`).Scan(&attempts, &reqs, &reported, &debit, &empty, &complete)
-	if err != nil || attempts != 2 || reqs != 1 || reported != 1 || debit != 0.125 || empty != 1 || complete != 1 {
+	err = db.QueryRow(`SELECT count(*),count(distinct conversation_id),count(distinct request_id),count(credits),sum(credits),sum(outcome='empty_response'),sum(outcome='completed' and credits is null) FROM kiro_requests`).Scan(&attempts, &conversations, &reqs, &reported, &debit, &empty, &complete)
+	if err != nil || attempts != 2 || conversations != 1 || reqs != 1 || reported != 1 || debit != 0.125 || empty != 1 || complete != 1 {
 		t.Fatal(attempts, reqs, reported, debit, empty, complete, err)
 	}
 }

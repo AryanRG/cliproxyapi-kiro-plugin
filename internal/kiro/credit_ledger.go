@@ -52,7 +52,7 @@ func creditRequestFor(req executorRequest, model string, stream bool) creditRequ
 
 type creditAttempt struct {
 	creditRequest
-	attemptID, upstreamID string
+	attemptID, upstreamID, conversationID string
 }
 
 func (a creditAttempt) record(outcome string, u kiroUsage) {
@@ -110,9 +110,21 @@ func (a creditAttempt) write(outcome string, u kiroUsage) error {
 	if u.havePct {
 		pct = &u.pct
 	}
-	_, err = tx.Exec(`INSERT INTO kiro_requests(attempt_id,request_id,upstream_request_id,finished_at,model,streamed,account_hash,session_hash,outcome,credits,context_percentage)
- VALUES(?,?,NULLIF(?,''),?,?,?,NULLIF(?,''),NULLIF(?,''),?,?,?) ON CONFLICT(attempt_id) DO NOTHING`,
-		a.attemptID, a.requestID, a.upstreamID, time.Now().UTC().Format(time.RFC3339Nano), a.model, a.stream, a.accountHash, a.sessionHash, outcome, credits, pct)
+	var version int
+	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version == 0 {
+		if _, err = tx.Exec("ALTER TABLE kiro_requests ADD COLUMN conversation_id TEXT"); err != nil {
+			return err
+		}
+		if _, err = tx.Exec("PRAGMA user_version=1"); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(`INSERT INTO kiro_requests(attempt_id,request_id,upstream_request_id,finished_at,model,streamed,account_hash,session_hash,outcome,credits,context_percentage,conversation_id)
+ VALUES(?,?,NULLIF(?,''),?,?,?,NULLIF(?,''),NULLIF(?,''),?,?,?,NULLIF(?,'')) ON CONFLICT(attempt_id) DO NOTHING`,
+		a.attemptID, a.requestID, a.upstreamID, time.Now().UTC().Format(time.RFC3339Nano), a.model, a.stream, a.accountHash, a.sessionHash, outcome, credits, pct, a.conversationID)
 	if err != nil {
 		return err
 	}

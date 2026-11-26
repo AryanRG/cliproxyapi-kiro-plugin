@@ -16,7 +16,7 @@ const generateURLTemplate = "https://q.%s.amazonaws.com/generateAssistantRespons
 
 // maxEmptyResponseAttempts bounds retries when Kiro returns HTTP 200 with no
 // content and no tool calls. Upstream occasionally goes silent for a given
-// conversation; a fresh conversationId on the next attempt usually recovers.
+// conversation. An empty response is retried within the same identified chat.
 const maxEmptyResponseAttempts = 3
 
 // executorRequest mirrors the host's rpcExecutorRequest: the embedded
@@ -85,15 +85,14 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 	ledger := creditRequestFor(req, model, false)
 	var lastResult *kiroExecResult
 	for attempt := 0; attempt < maxEmptyResponseAttempts; attempt++ {
-		// Rebuild each attempt so a retry carries a fresh conversationId.
-		cwReq, maps := buildCodeWhispererRequest(creq, model, cred)
+		cwReq, maps := buildCodeWhispererRequest(creq, model, cred, conversationFor(req, creq))
 		cwReq.AdditionalModelRequestFields = controls
 		cwBody, errMarshal := json.Marshal(cwReq)
 		if errMarshal != nil {
 			return nil, nil, fmt.Errorf("encode codewhisperer request: %w", errMarshal)
 		}
 
-		entry := creditAttempt{creditRequest: ledger, attemptID: cwReq.ConversationState.ConversationID}
+		entry := creditAttempt{creditRequest: ledger, attemptID: uuidV4(), conversationID: cwReq.ConversationState.ConversationID}
 		resp, errDo := kiroHTTPDo(hostapi.HTTPRequest{
 			HostCallbackID: req.HostCallbackID,
 			Method:         http.MethodPost,

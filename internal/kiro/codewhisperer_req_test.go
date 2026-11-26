@@ -11,7 +11,7 @@ func buildFromJSON(t *testing.T, payload string, cred kiroCredential) *cwRequest
 	if err := json.Unmarshal([]byte(payload), &creq); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	req, _ := buildCodeWhispererRequest(creq, creq.Model, cred)
+	req, _ := buildCodeWhispererRequest(creq, creq.Model, cred, conversationFor(executorRequest{}, creq))
 	return req
 }
 

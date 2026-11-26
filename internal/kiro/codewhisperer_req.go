@@ -17,6 +17,7 @@ const (
 // ---- Claude Messages request shapes (executor input format = "claude") ----
 
 type claudeRequest struct {
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
 	OutputConfig *struct {
 		Effort string `json:"effort"`
 	} `json:"output_config"`
@@ -70,11 +71,12 @@ type cwRequest struct {
 }
 
 type cwConversationState struct {
-	AgentTaskType   string           `json:"agentTaskType"`
-	ChatTriggerType string           `json:"chatTriggerType"`
-	ConversationID  string           `json:"conversationId"`
-	History         []cwHistoryItem  `json:"history,omitempty"`
-	CurrentMessage  cwCurrentMessage `json:"currentMessage"`
+	RootConversationID string           `json:"rootConversationId"`
+	AgentTaskType      string           `json:"agentTaskType"`
+	ChatTriggerType    string           `json:"chatTriggerType"`
+	ConversationID     string           `json:"conversationId"`
+	History            []cwHistoryItem  `json:"history,omitempty"`
+	CurrentMessage     cwCurrentMessage `json:"currentMessage"`
 }
 
 type cwCurrentMessage struct {
@@ -203,7 +205,7 @@ type roleMessage struct {
 // buildCodeWhispererRequest converts a Claude Messages request into the
 // CodeWhisperer conversationState request. It does NOT inject any identity or
 // override prompt; only the client's own system text is forwarded.
-func buildCodeWhispererRequest(creq claudeRequest, model string, cred kiroCredential) (*cwRequest, *toolNameMaps) {
+func buildCodeWhispererRequest(creq claudeRequest, model string, cred kiroCredential, identity conversationIdentity) (*cwRequest, *toolNameMaps) {
 	systemText := contentToText(creq.System)
 	cwModel := resolveKiroModel(model)
 	maps := buildToolNameMaps(creq.Tools)
@@ -292,10 +294,11 @@ func buildCodeWhispererRequest(creq claudeRequest, model string, cred kiroCreden
 
 	req := &cwRequest{
 		ConversationState: cwConversationState{
-			AgentTaskType:   agentTaskVibe,
-			ChatTriggerType: chatTriggerManual,
-			ConversationID:  uuidV4(),
-			CurrentMessage:  cwCurrentMessage{UserInputMessage: *current},
+			AgentTaskType:      agentTaskVibe,
+			ChatTriggerType:    chatTriggerManual,
+			ConversationID:     identity.id,
+			RootConversationID: identity.root,
+			CurrentMessage:     cwCurrentMessage{UserInputMessage: *current},
 		},
 	}
 	if len(history) > 0 {
