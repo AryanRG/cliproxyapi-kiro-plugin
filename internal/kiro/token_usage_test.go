@@ -7,7 +7,7 @@ import (
 
 func TestToolOnlyUsageIsNotZeroAndMatchesStreaming(t *testing.T) {
 	calls := []toolCall{{id: "tool-1", name: "write_file", input: json.RawMessage(`{"path":"example.txt","content":"hello world"}`)}}
-	message := aggregateToClaudeMessage("", calls, "claude-opus-5.5", []byte(`{"messages":[]}`))
+	message := aggregateToClaudeMessage("", calls, "claude-opus-5.5", 0)
 	if message.Usage.OutputTokens <= 0 {
 		t.Fatal("tool output was omitted from token estimate")
 	}

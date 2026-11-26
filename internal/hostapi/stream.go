@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"net/http"
 )
 
 type HTTPStream struct {
-	StatusCode int    `json:"status_code"`
-	StreamID   string `json:"stream_id"`
+	Headers    http.Header `json:"headers,omitempty"`
+	StatusCode int         `json:"status_code"`
+	StreamID   string      `json:"stream_id"`
 }
 type HTTPChunk struct {
 	Payload []byte `json:"payload"`

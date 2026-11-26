@@ -148,6 +148,9 @@ func (s *incrementalMessage) content(text string, final bool) error {
 	return nil
 }
 func (s *incrementalMessage) consume(kind string, p framePayload) error {
+	if failure := metadataFailure(p); failure != nil {
+		return failure
+	}
 	if isUsageEvent(kind) {
 		s.usage.observe(kind, p)
 		if s.usage.contextOverflow() {
@@ -307,6 +310,9 @@ func (s *incrementalMessage) finish() error {
 		return fmt.Errorf("empty_upstream_response")
 	}
 	usage, _ := s.usage.anthropicUsage(s.model, s.inputTokens, estimateTokens(s.outputBytes))
+	if metering := s.usage.metering(); metering != nil {
+		usage["kiro"] = metering
+	}
 	stop := "end_turn"
 	if s.toolCount > 0 {
 		stop = "tool_use"

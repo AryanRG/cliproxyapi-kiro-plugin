@@ -104,6 +104,34 @@ func promptTooLong(detail string) *kiroFailure {
 	return &kiroFailure{Status: http.StatusBadRequest, Code: "invalid_request_error", Message: promptTooLongPrefix + detail}
 }
 
+// A filtered completion is a deliberate provider refusal, not an empty
+// successful answer. In particular the non-streaming empty-answer retry loop
+// must not replay it. HTTP 400 avoids treating the account itself as invalid.
+func metadataFailure(p framePayload) *kiroFailure {
+	if p.StopReason != "CONTENT_FILTERED" {
+		if len(p.MetadataEvent) > 0 {
+			var nested framePayload
+			if json.Unmarshal(p.MetadataEvent, &nested) == nil {
+				nested.MetadataEvent = nil
+				return metadataFailure(nested)
+			}
+		}
+		return nil
+	}
+	var details struct {
+		Refusal struct {
+			Explanation string `json:"explanation"`
+		} `json:"refusal"`
+	}
+	_ = json.Unmarshal(p.StopDetails, &details)
+	explanation := credentialLike.ReplaceAllString(strings.Join(strings.Fields(details.Refusal.Explanation), " "), "${1}[redacted]")
+	message := "Kiro declined this request (CONTENT_FILTERED). No automatic retry or model fallback was attempted."
+	if explanation != "" {
+		message += " " + truncate(explanation, maxErrorDetail)
+	}
+	return &kiroFailure{Status: http.StatusBadRequest, Code: "content_filter_error", Message: message}
+}
+
 // classifyKiroFailure maps a non-2xx generateAssistantResponse answer.
 func classifyKiroFailure(status int, body []byte) *kiroFailure {
 	reason, detail := errorDetail(body)
@@ -129,6 +157,11 @@ func classifyStreamException(headers map[string]string, payload []byte) *kiroFai
 func classifyReason(status int, reason, detail string, lenient bool) *kiroFailure {
 	has := func(code string) bool { return reason == code || strings.Contains(detail, code) }
 	switch {
+	case has("FEATURE_NOT_SUPPORTED") && strings.Contains(strings.ToLower(detail), "version of kiro is no longer supported"):
+		// This is a plugin/client compatibility failure shared by every account,
+		// not expired credentials. Stop instead of marking healthy logins bad.
+		return &kiroFailure{Status: http.StatusBadRequest, Code: "kiro_client_update_required",
+			Message: "Kiro rejected an unsupported client version. Update the Kiro proxy plugin before retrying; account login is not the cause. " + detail}
 	case isPromptTooLong(reason, detail, lenient):
 		return promptTooLong(detail)
 	case has(reasonMonthlyRequestCount):

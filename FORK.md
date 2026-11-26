@@ -6,6 +6,16 @@ Upstream base: `xiaokui-dev/cliproxyapi-kiro-plugin` at `f7b60a605c3613c18e4011b
 
 ## Current changes
 
+- 0.4.0-local.7 adds adaptive effort and the 1M input-window fallback for the account-discovered `claude-fable-5.2` preview. Both account catalogs report low through max effort and a 64000-token maximum output.
+
+- Match Kiro IDE 1.4.121's client version contract. Retired-client rejections
+  are non-retryable compatibility errors, not account authentication failures.
+- Discover each organization's own profile when it is absent from the
+  credential. Attach it on streaming, non-streaming, and quota requests; leave
+  the host's login files and refresh ownership unchanged.
+- Surface provider `CONTENT_FILTERED` metadata as a non-retryable refusal,
+  without labelling it empty output, retrying it, or cooling the account.
+
 - 0.4.0-local.2: clamp client `max_tokens` into Kiro's 1024–64000 range instead of rejecting the request (Claude Code sends values outside it).
 
 - Stream AWS frames incrementally through host callbacks, including text, reasoning and tool arguments.
@@ -83,14 +93,19 @@ Kiro usage events are parsed when present: `metadataEvent`/`messageMetadataEvent
 `tokenUsage` (provider counts: uncached input, output, cache read/write),
 `contextUsageEvent.contextUsagePercentage`, and `meteringEvent` credits. Input
 tokens prefer provider counts, then percentage x model context window (catalogue
-`maxInputTokens`, else known 1M models, else 200k), then the bytes/4 estimate.
+`maxInputTokens`, else known 1M models, else 200k), then the local text-and-image token estimate.
 Final counts are sent in the Anthropic `message_delta` usage and the non-stream
 response. Non-stream `X-Kiro-Token-Usage` is `provider`, `context-percentage` or
 `estimated`; streaming headers are fixed before any Kiro event, so they always
-say `estimated` and the `message_delta` usage is authoritative. Credits appear
-only as `X-Kiro-Credits`/`X-Kiro-Credit-Unit` on non-stream responses, never as
-tokens. The live event shapes were taken from reference implementations and have
-not been re-probed against Kiro in this fork.
+say `estimated` and the `message_delta` usage is authoritative. Completed Messages responses expose the provider's measurements in
+`usage.kiro.context_usage_percentage` and `usage.kiro.credits`. Streaming
+clients read the same fields from the final `message_delta`. Missing measurements
+are omitted. A reported zero is preserved. Non-stream responses also retain the
+existing credit headers for hosts that forward them.
+
+When Kiro advertises Auto, the plugin registers it as `kiro-auto`. Clients must
+send that ID to select Kiro. The plugin translates it to `auto` upstream.
+CLIProxy reserves the unqualified `auto` for proxy-wide model selection.
 
 `message_start` is deferred until the first content, reasoning, tool or usage
 event; pings start only after it. An upstream error before that point closes the
@@ -108,3 +123,28 @@ o200k_base BPE (pure Go, vocabulary compiled in, works offline) plus
 Anthropic's documented image estimate. Kiro has no count endpoint, and the
 Anthropic tokenizer differs, so this is an estimate (`X-Kiro-Token-Usage:
 estimated`, `X-Kiro-Token-Estimator: o200k-bpe`), not a provider count.
+
+## Durable request credits
+
+Set the Kiro plugin setting `credit_ledger_path` to an absolute path for a new,
+plugin-owned SQLite database outside the binary installation directory. Keep that
+path when reinstalling. An empty value disables recording. The plugin writes one
+row per upstream inference attempt. Internal retries have distinct attempt IDs
+and share a request ID. A provider-reported zero is stored as zero. A missing
+measurement is SQL NULL. An interrupted attempt can contain a partial debit.
+Use the outcome when interpreting totals. Input, cache and output token counters
+are updated independently as Kiro sends cumulative snapshots.
+
+To inspect recent calls, open the file with `sqlite3 -readonly` and run:
+
+```sql
+SELECT finished_at, model, streamed, outcome, credits, context_percentage,
+       request_id, upstream_request_id
+FROM kiro_requests ORDER BY rowid DESC LIMIT 30;
+```
+
+`upstream_request_id` is the AWS request ID when available. Account and session
+identifiers are SHA-256 hashes. The ledger stores no message text, tool results
+or credentials. It is separate from the desktop console's managed database.
+A local write failure is logged and never causes inference to be repeated.
+Only requests processed while recording is enabled are covered.

@@ -39,6 +39,48 @@ func exceptionFrame(kind, payload string) []byte {
 
 const providerUsageFrame = `{"tokenUsage":{"uncachedInputTokens":120,"outputTokens":7,"cacheReadInputTokens":3000,"cacheWriteInputTokens":40}}`
 
+const filteredMetadata = `{"stopReason":"CONTENT_FILTERED","stopDetails":{"refusal":{"category":"CYBER","explanation":"The selected model cannot continue this conversation."}}}`
+
+func TestProviderRefusalIsNotEmptySuccessOrRetried(t *testing.T) {
+	frame := encodeFrame("metadataEvent", filteredMetadata)
+	_, _, failure := parseEventStreamResponse(frame)
+	if failure == nil || failure.Code != "content_filter_error" || failure.Retryable || failure.Status != 400 {
+		t.Fatalf("provider refusal lost: %+v", failure)
+	}
+	s, _ := newIncrementalMessage("claude-opus-5.5", 10, &toolNameMaps{}, func([]byte) error { return nil })
+	var p framePayload
+	_ = json.Unmarshal([]byte(filteredMetadata), &p)
+	if err := s.consume("metadataEvent", p); err == nil || s.started {
+		t.Fatal("refusal started a successful stream")
+	}
+	old := kiroHTTPDo
+	t.Cleanup(func() { kiroHTTPDo = old })
+	calls := 0
+	kiroHTTPDo = func(hostapi.HTTPRequest) (*hostapi.HTTPResponse, error) {
+		calls++
+		return &hostapi.HTTPResponse{StatusCode: 200, Body: frame}, nil
+	}
+	raw, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
+		Model: "claude-opus-5.5", Payload: []byte(`{"messages":[{"role":"user","content":"synthetic test"}]}`), StorageJSON: []byte(`{"accessToken":"test"}`),
+	}})
+	result, envelope, err := fetchKiroEvents(raw)
+	if err != nil || result != nil || !strings.Contains(string(envelope), "content_filter_error") || calls != 1 {
+		t.Fatalf("refusal replayed or hidden: calls=%d err=%v envelope=%s", calls, err, envelope)
+	}
+}
+
+func TestUnsupportedClientVersionIsNotAnAccountAuthFailure(t *testing.T) {
+	body := []byte(`{"reason":"FEATURE_NOT_SUPPORTED","message":"This version of Kiro is no longer supported. Please update to the latest version of Kiro to continue."}`)
+	f := classifyKiroFailure(403, body)
+	if f.Status != 400 || f.Code != "kiro_client_update_required" || f.Retryable {
+		t.Fatalf("version rejection must stop without cooling healthy accounts: %+v", f)
+	}
+	other := classifyKiroFailure(403, []byte(`{"reason":"FEATURE_NOT_SUPPORTED","message":"This feature is unavailable for this account."}`))
+	if other.Status != 403 {
+		t.Fatalf("unrelated permission failure changed: %+v", other)
+	}
+}
+
 func TestParseUsageEvents(t *testing.T) {
 	var body []byte
 	body = append(body, encodeFrame("assistantResponseEvent", `{"content":"hi"}`)...)
@@ -51,7 +93,7 @@ func TestParseUsageEvents(t *testing.T) {
 	if fail != nil || len(events) != 1 {
 		t.Fatal(fail, events)
 	}
-	if !u.haveTokens || u.uncached != 120 || u.output != 7 || u.cacheRead != 3000 || u.cacheWrite != 40 {
+	if u.uncached == nil || *u.uncached != 120 || *u.output != 7 || *u.cacheRead != 3000 || *u.cacheWrite != 40 {
 		t.Fatalf("%+v", u)
 	}
 	if !u.havePct || u.pct != 12.5 || u.credits != 0.75 || u.creditUnit != "credits" {
@@ -112,6 +154,7 @@ func stubHTTP(t *testing.T, status int, body []byte) *int {
 func TestNonStreamReportsProviderUsageAndCredits(t *testing.T) {
 	body := append(encodeFrame("assistantResponseEvent", `{"content":"hi"}`), encodeFrame("metadataEvent", providerUsageFrame)...)
 	body = append(body, encodeFrame("meteringEvent", `{"unit":"credit","unitPlural":"credits","usage":0.1}`)...)
+	body = append(body, encodeFrame("contextUsageEvent", `{"contextUsagePercentage":2.5}`)...)
 	stubHTTP(t, 200, body)
 	out, err := executeKiro(nonStreamRequest(t))
 	if err != nil {
@@ -124,6 +167,10 @@ func TestNonStreamReportsProviderUsageAndCredits(t *testing.T) {
 	}
 	var msg claudeResponse
 	_ = json.Unmarshal(resp.Payload, &msg)
+	k := msg.Usage.Kiro
+	if k == nil || k.Credits == nil || *k.Credits != 0.1 || k.ContextUsagePercentage == nil || *k.ContextUsagePercentage != 2.5 {
+		t.Fatalf("metering: %s", resp.Payload)
+	}
 	if msg.Usage.InputTokens != 120 || msg.Usage.OutputTokens != 7 || *msg.Usage.CacheReadInputTokens != 3000 || *msg.Usage.CacheCreationInputTokens != 40 {
 		t.Fatalf("%+v", msg.Usage)
 	}
@@ -223,9 +270,12 @@ func TestStreamProviderUsageInMessageDelta(t *testing.T) {
 	if !strings.Contains(string(start), `"input_tokens":120`) || !strings.Contains(string(start), `"cache_read_input_tokens":3000`) {
 		t.Fatal(string(start))
 	}
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("metadataEvent", `{"tokenUsage":{"outputTokens":7}}`)}
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("meteringEvent", `{"usage":0,"unit":"credit"}`)}
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("contextUsageEvent", `{"contextUsagePercentage":1.25}`)}
 	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("assistantResponseEvent", `{"content":"ok"}`), Done: true}
 	delta := h.waitEvent(t, "message_delta")
-	for _, want := range []string{`"input_tokens":120`, `"output_tokens":7`, `"cache_creation_input_tokens":40`} {
+	for _, want := range []string{`"context_usage_percentage":1.25`, `"credits":0`, `"input_tokens":120`, `"output_tokens":7`, `"cache_creation_input_tokens":40`} {
 		if !strings.Contains(string(delta), want) {
 			t.Fatal(string(delta))
 		}
@@ -284,5 +334,14 @@ func TestStreamExceptionAfterContentEmitsErrorEvent(t *testing.T) {
 	<-done
 	if strings.Contains(streamEvents(h), "message_stop") {
 		t.Fatal("error reported success")
+	}
+}
+
+func TestMissingKiroMeteringIsOmitted(t *testing.T) {
+	var u kiroUsage
+	u.observe("meteringEvent", framePayload{Usage: json.RawMessage("null")})
+	u.observe("contextUsageEvent", framePayload{ContextUsagePercentage: json.RawMessage(`"NaN"`)})
+	if u.metering() != nil {
+		t.Fatal("missing measurements surfaced as observed")
 	}
 }

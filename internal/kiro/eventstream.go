@@ -40,6 +40,8 @@ type framePayload struct {
 	Unit                   string          `json:"unit"`
 	UnitPlural             string          `json:"unitPlural"`
 	Usage                  json.RawMessage `json:"usage"`
+	StopReason             string          `json:"stopReason"`
+	StopDetails            json.RawMessage `json:"stopDetails"`
 }
 
 // parseEventStreamFrames decodes an AWS event-stream response body into events.
@@ -88,6 +90,9 @@ func parseEventStreamResponse(buffer []byte) ([]cwEvent, kiroUsage, *kiroFailure
 		var parsed framePayload
 		if err := json.Unmarshal(payload, &parsed); err != nil {
 			continue
+		}
+		if failure := metadataFailure(parsed); failure != nil {
+			return events, usage, failure
 		}
 		if isUsageEvent(eventType) {
 			usage.observe(eventType, parsed)

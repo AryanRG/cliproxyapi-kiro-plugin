@@ -111,7 +111,7 @@ func TestKiroModelsForAuthDiscoversAvailableModels(t *testing.T) {
 		t.Fatalf("unexpected Claude modalities: %q", got)
 	}
 
-	if result.Models[1].ID != "auto" || result.Models[1].Name != "auto" {
+	if result.Models[1].ID != "kiro-auto" || result.Models[1].Name != "auto" {
 		t.Fatalf("unexpected auto model: %+v", result.Models[1])
 	}
 	qwen := result.Models[2]
@@ -234,8 +234,8 @@ func TestKiroModelsForAuthDiscoversProfileForIdC(t *testing.T) {
 		t.Fatalf("decode model response: %v", errUnmarshal)
 	}
 	// The account-scoped list (2 models), NOT the static catalog.
-	if len(result.Models) != 2 || result.Models[0].ID != "auto" || result.Models[1].ID != "claude-sonnet-4-6" {
-		t.Fatalf("expected account-scoped models [auto, claude-sonnet-4-6], got %+v", result.Models)
+	if len(result.Models) != 2 || result.Models[0].ID != "kiro-auto" || result.Models[1].ID != "claude-sonnet-4-6" {
+		t.Fatalf("expected account-scoped models [kiro-auto, claude-sonnet-4-6], got %+v", result.Models)
 	}
 }
 
@@ -341,10 +341,13 @@ func TestClientKiroModelID(t *testing.T) {
 		"claude-opus-4.8":   "claude-opus-4-8",
 		"claude-sonnet-4.6": "claude-sonnet-4-6",
 		"claude-sonnet-4":   "claude-sonnet-4",
-		"auto":              "auto",
+		"auto":              "kiro-auto",
 		"deepseek-3.2":      "deepseek-3.2",
 	}
 	for native, want := range tests {
+		if got := resolveKiroModel(want); got != native {
+			t.Errorf("upstream model for %s = %s, want %s", want, got, native)
+		}
 		if got := clientKiroModelID(native); got != want {
 			t.Errorf("clientKiroModelID(%q) = %q, want %q", native, got, want)
 		}

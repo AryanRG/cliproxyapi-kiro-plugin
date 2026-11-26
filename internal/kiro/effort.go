@@ -6,10 +6,10 @@ import (
 	"slices"
 )
 
-// Exact model IDs verified against both account catalogues on 2026-11-01.
+// Exact model IDs verified against both account catalogues (Fable 5.2 verified 2026-11-26).
 // Do not normalize dotted Kiro IDs to the distinct Claude provider IDs.
 func effortModel(model string) bool {
-	return slices.Contains([]string{"claude-opus-5.5", "claude-sonnet-5.5", "claude-fable-5.1", "claude-haiku-5.5"}, resolveKiroModel(model))
+	return slices.Contains([]string{"claude-opus-5.5", "claude-sonnet-5.5", "claude-fable-5.1", "claude-fable-5.2", "claude-haiku-5.5"}, resolveKiroModel(model))
 }
 func modelThinkingSupport(model string) *pluginapi.ThinkingSupport {
 	if !effortModel(model) {

@@ -88,10 +88,11 @@ func kiroRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerKiro,
-			Version:          "0.4.0-local.2",
+			Version:          "0.4.0-local.10",
 			Author:           "xiaokui-dev",
-			GitHubRepository: "https://github.com/xiaokui-dev/cliproxyapi-kiro-plugin",
+			GitHubRepository: "https://github.com/AryanRG/cliproxyapi-kiro-plugin",
 			ConfigFields: []pluginapi.ConfigField{
+				{Name: "credit_ledger_path", Type: pluginapi.ConfigFieldTypeString, Description: "Absolute path to a plugin-owned SQLite credit ledger. Empty disables recording."},
 				{Name: "idc_start_url", Type: pluginapi.ConfigFieldTypeString, Description: "Organization IAM Identity Center portal start URL."},
 				{Name: "idc_region", Type: pluginapi.ConfigFieldTypeString, Description: "AWS Region that hosts your Identity Center instance."},
 			},

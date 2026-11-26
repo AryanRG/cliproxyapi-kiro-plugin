@@ -45,6 +45,7 @@ jobs:
           BUILD_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           [[ "$BUILD_TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || exit 1
+          test "v$(cat VERSION)" = "$BUILD_TAG"
           echo "VERSION=${BUILD_TAG#v}" >> "$GITHUB_ENV"
 
       - name: Test before packaging
@@ -61,7 +62,7 @@ jobs:
           if [ -n "${{ matrix.cc }}" ]; then
             export CC="${{ matrix.cc }}"
           fi
-          go build -buildmode=c-shared -o "${{ matrix.lib }}" .
+          go build -trimpath -buildmode=c-shared -o "${{ matrix.lib }}" .
           asset="kiro_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
           # zip 根目录只放动态库，符合商店的 zip 布局要求
           if [ "${{ matrix.goos }}" = "windows" ]; then

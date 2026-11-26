@@ -27,9 +27,10 @@ type streamJob struct {
 	done   chan struct{}
 }
 type streamInput struct {
-	payload []byte
-	err     error
-	done    bool
+	upstreamID string
+	payload    []byte
+	err        error
+	done       bool
 }
 
 func ShutdownStreams() {
@@ -75,6 +76,10 @@ func executeKiroStream(request []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	cred, err = credentialWithProfile(cred, req.HostCallbackID, region)
+	if err != nil {
+		return wire.ErrorStatus("kiro_profile_required", err.Error(), 400), nil
+	}
 	cw, maps := buildCodeWhispererRequest(creq, model, cred)
 	cw.AdditionalModelRequestFields = controls
 	body, err := json.Marshal(cw)
@@ -97,9 +102,10 @@ func executeKiroStream(request []byte) ([]byte, error) {
 	activeStreams.jobs[job] = struct{}{}
 	activeStreams.Unlock()
 	httpReq := hostapi.HTTPRequest{HostCallbackID: req.HostCallbackID, Method: "POST", URL: url, Headers: kiroRequestHeaders(cred), Body: body}
+	entry := creditAttempt{creditRequest: creditRequestFor(req, model, true), attemptID: cw.ConversationState.ConversationID}
 	go func() {
 		defer func() { activeStreams.Lock(); delete(activeStreams.jobs, job); activeStreams.Unlock(); close(job.done) }()
-		runKiroStream(ctx, req.StreamID, op, httpReq, model, estimateTokens(len(req.Payload)), maps, productionStreamPolicy)
+		runKiroStream(ctx, req.StreamID, op, httpReq, model, estimateClaudeRequest(&creq), maps, productionStreamPolicy, entry)
 	}()
 	// Stream headers precede every Kiro event, so they can only name the
 	// fallback source. Final provider or context-percentage counts, when Kiro
@@ -107,7 +113,7 @@ func executeKiroStream(request []byte) ([]byte, error) {
 	return wire.OK(executorStreamResponse{Headers: usageHeaders("text/event-stream", usageSourceEstimated, nil)})
 }
 
-func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRequest, model string, inputTokens int, maps *toolNameMaps, policy streamPolicy) {
+func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRequest, model string, inputTokens int, maps *toolNameMaps, policy streamPolicy, entry creditAttempt) {
 	ctx, cancel := context.WithTimeout(parent, policy.total)
 	code := "stream_interrupted"
 	var failure *kiroFailure
@@ -123,6 +129,15 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 		if recover() != nil {
 			code, failure = "stream_internal_error", nil
 		}
+		var usage kiroUsage
+		if message != nil {
+			usage = message.usage
+		}
+		outcome := code
+		if outcome == "" {
+			outcome = "completed"
+		}
+		entry.record(outcome, usage)
 		cancel()
 		_ = hostapi.CancelOperation(request.HostCallbackID, op)
 		if failure != nil {
@@ -166,6 +181,9 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 		if up.StreamID != "" {
 			defer hostapi.HTTPStreamClose(up.StreamID)
 		}
+		if id := upstreamRequestID(up.Headers); id != "" && !send(streamInput{upstreamID: id}) {
+			return
+		}
 		if up.StatusCode < 200 || up.StatusCode >= 300 {
 			send(streamInput{err: classifyKiroFailure(up.StatusCode, readErrorBody(up.StreamID))})
 			return
@@ -207,6 +225,9 @@ func runKiroStream(parent context.Context, id, op string, request hostapi.HTTPRe
 				return
 			}
 		case p := <-parts:
+			if p.upstreamID != "" {
+				entry.upstreamID = p.upstreamID
+			}
 			if p.err != nil {
 				fail(p.err)
 				return

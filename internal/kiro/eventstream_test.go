@@ -50,7 +50,7 @@ func TestParseEventStreamContent(t *testing.T) {
 	}
 
 	text, calls := aggregateEvents(events, &toolNameMaps{})
-	msg := aggregateToClaudeMessage(text, calls, "claude-sonnet-4-5", []byte("{}"))
+	msg := aggregateToClaudeMessage(text, calls, "claude-sonnet-4-5", 0)
 	if len(msg.Content) != 1 {
 		t.Fatalf("expected 1 content block, got %d", len(msg.Content))
 	}
@@ -70,7 +70,7 @@ func TestParseEventStreamToolUse(t *testing.T) {
 	events := parseEventStreamFrames(buf)
 	maps := &toolNameMaps{fromKiroMap: map[string]string{}}
 	text, calls := aggregateEvents(events, maps)
-	msg := aggregateToClaudeMessage(text, calls, "claude-sonnet-4-5", []byte("{}"))
+	msg := aggregateToClaudeMessage(text, calls, "claude-sonnet-4-5", 0)
 
 	if msg.StopReason != "tool_use" {
 		t.Fatalf("expected tool_use stop reason, got %q", msg.StopReason)
@@ -87,7 +87,7 @@ func TestPlaceholderToolFilteredFromResponse(t *testing.T) {
 	buf := encodeFrame("toolUseEvent", `{"name":"no_tool_available","toolUseId":"t0","input":"{}"}`)
 	events := parseEventStreamFrames(buf)
 	text, calls := aggregateEvents(events, &toolNameMaps{})
-	msg := aggregateToClaudeMessage(text, calls, "claude-sonnet-4-5", []byte("{}"))
+	msg := aggregateToClaudeMessage(text, calls, "claude-sonnet-4-5", 0)
 	for _, block := range msg.Content {
 		if string(block) != "" && containsPlaceholder(string(block)) {
 			t.Fatalf("placeholder tool leaked into response: %s", block)

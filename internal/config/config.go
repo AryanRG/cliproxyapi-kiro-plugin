@@ -17,8 +17,9 @@ import (
 // CodeWhisperer/OIDC region is not configurable for Builder ID (it always uses
 // the default, us-east-1); IdC uses IDCRegion.
 type Config struct {
-	IDCStartURL string `yaml:"idc_start_url"`
-	IDCRegion   string `yaml:"idc_region"`
+	CreditLedgerPath string `yaml:"credit_ledger_path"`
+	IDCStartURL      string `yaml:"idc_start_url"`
+	IDCRegion        string `yaml:"idc_region"`
 }
 
 var (

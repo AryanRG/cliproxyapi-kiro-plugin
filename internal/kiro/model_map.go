@@ -45,6 +45,7 @@ var kiroModelIDs = []string{
 // model (INVALID_MODEL_ID) according to the account's plan/tier. The plugin must
 // not pre-assume any account's capabilities.
 var modelMapping = map[string]string{
+	"kiro-auto":         "auto", // The host reserves bare auto for global routing.
 	"claude-opus-5":     "claude-opus-5",
 	"claude-opus-4-8":   "claude-opus-4.8",
 	"claude-opus-4-7":   "claude-opus-4.7",
@@ -60,6 +61,7 @@ var modelMapping = map[string]string{
 // nativeModelMapping keeps the public client ID stable while preserving the
 // native dotted ID returned by Kiro in ModelInfo.Name.
 var nativeModelMapping = map[string]string{
+	"auto":              "kiro-auto",
 	"claude-opus-5":     "claude-opus-5",
 	"claude-opus-4.8":   "claude-opus-4-8",
 	"claude-opus-4.7":   "claude-opus-4-7",
@@ -97,7 +99,8 @@ func fallbackModelInputTokenLimit(id string) int64 {
 	// https://kiro.dev/docs/models/ (verified 2026-10-04).
 	// Only the dotted native ID is a Kiro route; "claude-opus-5-5" is a distinct
 	// (non-Kiro) Claude account route in this fork and keeps the default.
-	if strings.TrimSpace(id) == "claude-opus-5.5" {
+	switch strings.TrimSpace(id) {
+	case "claude-opus-5.5", "claude-fable-5.2":
 		return 1000000
 	}
 	return defaultModelInputTokenLimit

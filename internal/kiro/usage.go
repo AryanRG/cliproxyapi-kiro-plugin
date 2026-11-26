@@ -108,12 +108,16 @@ func fetchUsageLimits(callbackID string, cred kiroCredential) (json.RawMessage, 
 	if errRegion != nil {
 		return nil, fmt.Errorf("invalid kiro credential region: %w", errRegion)
 	}
+	cred, errProfile := credentialWithProfile(cred, callbackID, region)
+	if errProfile != nil {
+		return nil, errProfile
+	}
 
 	params := url.Values{}
 	params.Set("isEmailRequired", "true")
 	params.Set("origin", originAIEditor)
 	params.Set("resourceType", usageResourceType)
-	if strings.EqualFold(strings.TrimSpace(cred.AuthMethod), "social") && cred.ProfileArn != "" {
+	if cred.ProfileArn != "" {
 		params.Set("profileArn", cred.ProfileArn)
 	}
 	// 请求头携带 accessToken:先校验 region 再拼查询串。

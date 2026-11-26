@@ -30,11 +30,11 @@ type executorRequest struct {
 // kiroExecResult holds the aggregated assistant output and the context needed to
 // render either a non-streaming message or an SSE stream.
 type kiroExecResult struct {
-	text           string
-	calls          []toolCall
-	model          string
-	requestPayload []byte
-	usage          kiroUsage
+	text    string
+	calls   []toolCall
+	model   string
+	request *claudeRequest
+	usage   kiroUsage
 }
 
 // fetchKiroEvents runs the shared request path: build the conversationState
@@ -77,7 +77,12 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 	if errURL != nil {
 		return nil, wire.ErrorStatus("invalid_credential", "invalid kiro endpoint: "+errURL.Error(), http.StatusBadRequest), nil
 	}
+	cred, errProfile := credentialWithProfile(cred, req.HostCallbackID, region)
+	if errProfile != nil {
+		return nil, wire.ErrorStatus("kiro_profile_required", errProfile.Error(), http.StatusBadRequest), nil
+	}
 
+	ledger := creditRequestFor(req, model, false)
 	var lastResult *kiroExecResult
 	for attempt := 0; attempt < maxEmptyResponseAttempts; attempt++ {
 		// Rebuild each attempt so a retry carries a fresh conversationId.
@@ -88,6 +93,7 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 			return nil, nil, fmt.Errorf("encode codewhisperer request: %w", errMarshal)
 		}
 
+		entry := creditAttempt{creditRequest: ledger, attemptID: cwReq.ConversationState.ConversationID}
 		resp, errDo := kiroHTTPDo(hostapi.HTTPRequest{
 			HostCallbackID: req.HostCallbackID,
 			Method:         http.MethodPost,
@@ -96,8 +102,10 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 			Body:           cwBody,
 		})
 		if errDo != nil {
+			entry.record("transport_error", kiroUsage{})
 			return nil, wire.ErrorStatus("upstream_error", errDo.Error(), http.StatusBadGateway), nil
 		}
+		entry.upstreamID = upstreamRequestID(resp.Headers)
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			// Classified errors keep the upstream status verbatim except for the
 			// documented reason codes (see classifyKiroFailure). We deliberately do NOT remap the
@@ -105,24 +113,28 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 			// (hasUnauthorizedAuthFailure) and permanently blocks the host's auto-refresh
 			// loop. Token freshness is kept proactively via NextRefreshAfter (set at
 			// parse/refresh time), so a healthy credential never reaches this branch.
+			entry.record("upstream_error", kiroUsage{})
 			return nil, classifyKiroFailure(resp.StatusCode, resp.Body).envelope(), nil
 		}
 
 		events, usage, failure := parseEventStreamResponse(resp.Body)
 		if failure != nil {
+			entry.record(failure.Code, usage)
 			return nil, failure.envelope(), nil
 		}
 		text, calls := aggregateEvents(events, maps)
 		lastResult = &kiroExecResult{
-			text:           text,
-			calls:          calls,
-			model:          model,
-			requestPayload: req.Payload,
-			usage:          usage,
+			text:    text,
+			calls:   calls,
+			model:   model,
+			request: &creq,
+			usage:   usage,
 		}
 		if strings.TrimSpace(text) != "" || len(calls) > 0 {
+			entry.record("completed", usage)
 			return lastResult, nil, nil
 		}
+		entry.record("empty_response", usage)
 		if usage.contextOverflow() {
 			return nil, contextWindowFull(usage).envelope(), nil
 		}
@@ -135,6 +147,19 @@ func fetchKiroEvents(request []byte) (*kiroExecResult, []byte, error) {
 	return lastResult, nil, nil
 }
 
+// Newer Kiro clients require an organization profile for inference and quota. Resolve
+// it using only this request's token; never substitute another account/profile
+// or modify the host-owned credential and refresh state.
+func credentialWithProfile(cred kiroCredential, callbackID, region string) (kiroCredential, error) {
+	if strings.TrimSpace(cred.ProfileArn) == "" && strings.EqualFold(strings.TrimSpace(cred.AuthMethod), "IdC") {
+		cred.ProfileArn = discoverProfileArn(cred, callbackID, region)
+		if cred.ProfileArn == "" {
+			return cred, fmt.Errorf("Kiro organization profile could not be discovered for this login; request was not started. Check the account's Kiro profile assignment")
+		}
+	}
+	return cred, nil
+}
+
 // executeKiro handles a non-streaming request and returns an aggregated message.
 func executeKiro(request []byte) ([]byte, error) {
 	res, errEnv, err := fetchKiroEvents(request)
@@ -145,7 +170,11 @@ func executeKiro(request []byte) ([]byte, error) {
 		return errEnv, nil
 	}
 
-	message := aggregateToClaudeMessage(res.text, res.calls, res.model, res.requestPayload)
+	var estimate int
+	if res.usage.uncached == nil && !(res.usage.havePct && res.usage.pct > 0) {
+		estimate = estimateClaudeRequest(res.request)
+	}
+	message := aggregateToClaudeMessage(res.text, res.calls, res.model, estimate)
 	source := message.applyUsage(&res.usage)
 	payload, errMarshalResp := json.Marshal(message)
 	if errMarshalResp != nil {

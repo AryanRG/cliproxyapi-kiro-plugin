@@ -87,6 +87,31 @@ func TestHandleUsageLimitsAggregatesKiroOnly(t *testing.T) {
 	}
 }
 
+func TestOrganizationUsageDiscoversAndAttachesOwnProfile(t *testing.T) {
+	old := kiroHTTPDo
+	t.Cleanup(func() { kiroHTTPDo = old })
+	discovery, usage := 0, 0
+	kiroHTTPDo = func(req hostapi.HTTPRequest) (*hostapi.HTTPResponse, error) {
+		if req.Headers["Authorization"][0] != "Bearer own-token" {
+			t.Fatal("wrong usage account")
+		}
+		if strings.Contains(req.URL, "management.") {
+			discovery++
+			return &hostapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"profiles":[{"arn":"arn:own-profile"}]}`)}, nil
+		}
+		usage++
+		u, _ := url.Parse(req.URL)
+		if u.Query().Get("profileArn") != "arn:own-profile" {
+			return &hostapi.HTTPResponse{StatusCode: 400, Body: []byte(`{"message":"Invalid profileArn."}`)}, nil
+		}
+		return &hostapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":1,"usageLimit":500}]}`)}, nil
+	}
+	_, err := fetchUsageLimits("cb", kiroCredential{AuthMethod: "IdC", AccessToken: "own-token", Region: "us-east-1"})
+	if err != nil || discovery != 1 || usage != 1 {
+		t.Fatalf("quota profile failed: discovery=%d usage=%d err=%v", discovery, usage, err)
+	}
+}
+
 func TestHandleUsageLimitsPerCredentialError(t *testing.T) {
 	entries := []hostapi.AuthEntry{
 		{AuthIndex: "1", Name: "kiro-ok.json", Provider: providerKiro},

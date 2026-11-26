@@ -80,6 +80,11 @@ func countClaudeInputTokens(payload []byte) (int64, error) {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return 0, fmt.Errorf("decode claude count_tokens request: %w", err)
 	}
+	return int64(estimateClaudeRequest(&req)), nil
+}
+
+// estimateClaudeRequest counts message content, including images by dimensions.
+func estimateClaudeRequest(req *claudeRequest) int {
 	var c tokenCounter
 	c.content(req.System)
 	for _, msg := range req.Messages {
@@ -93,7 +98,7 @@ func countClaudeInputTokens(payload []byte) (int64, error) {
 		c.text(tool.Description)
 		c.rawJSON(tool.InputSchema)
 	}
-	return c.total(), nil
+	return int(c.total())
 }
 
 type tokenCounter struct {

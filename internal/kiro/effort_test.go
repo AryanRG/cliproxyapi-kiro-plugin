@@ -11,7 +11,7 @@ import (
 func TestEffortReachesKiro(t *testing.T) {
 	old := kiroHTTPDo
 	defer func() { kiroHTTPDo = old }()
-	for _, model := range []string{"claude-opus-5.5", "claude-sonnet-5.5", "claude-fable-5.1", "claude-haiku-5.5"} {
+	for _, model := range []string{"claude-opus-5.5", "claude-sonnet-5.5", "claude-fable-5.1", "claude-fable-5.2", "claude-haiku-5.5"} {
 		for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
 				calls := 0
@@ -95,7 +95,7 @@ func TestLegacyAndOptionalControls(t *testing.T) {
 	if modelThinkingSupport("claude-opus-5-5") != nil {
 		t.Fatal("cross-provider hyphen alias advertised")
 	}
-	for _, model := range []string{"claude-opus-5.5", "claude-sonnet-5.5", "claude-fable-5.1", "claude-haiku-5.5"} {
+	for _, model := range []string{"claude-opus-5.5", "claude-sonnet-5.5", "claude-fable-5.1", "claude-fable-5.2", "claude-haiku-5.5"} {
 		m := availableModelsToPluginModels([]availableModel{{ModelID: model}})
 		if m[0].ID != model || m[0].Thinking == nil || len(m[0].Thinking.Levels) != 5 {
 			t.Fatalf("catalog: %+v", m)

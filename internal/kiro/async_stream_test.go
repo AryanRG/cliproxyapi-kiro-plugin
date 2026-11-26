@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+
 	"github.com/xiaokui-dev/cliproxyapi-kiro-plugin/internal/hostapi"
 	"github.com/xiaokui-dev/cliproxyapi-kiro-plugin/internal/wire"
 )
@@ -151,12 +153,60 @@ func startFakeStream(h *fakeStreamHost, ctx context.Context, policy streamPolicy
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runKiroStream(ctx, "down", "op", hostapi.HTTPRequest{HostCallbackID: "cb"}, "claude-opus-5.5", 10, &toolNameMaps{}, policy)
+		runKiroStream(ctx, "down", "op", hostapi.HTTPRequest{HostCallbackID: "cb"}, "claude-opus-5.5", 10, &toolNameMaps{}, policy, creditAttempt{})
 	}()
 	return done
 }
 
 var testStreamPolicy = streamPolicy{time.Second, 3 * time.Second, 100 * time.Millisecond}
+
+func TestStreamingGenerationIncludesOwnIdCProfile(t *testing.T) {
+	h := installStreamHost(t)
+	oldHTTP := kiroHTTPDo
+	t.Cleanup(func() { kiroHTTPDo = oldHTTP })
+	kiroHTTPDo = func(req hostapi.HTTPRequest) (*hostapi.HTTPResponse, error) {
+		if !strings.Contains(req.URL, "management.") || req.Headers["Authorization"][0] != "Bearer own-token" {
+			t.Fatal("discovery used an unexpected account or endpoint")
+		}
+		return &hostapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"profiles":[{"arn":"arn:own-profile"}]}`)}, nil
+	}
+	seen := make(chan string, 1)
+	hostapi.HostCall = func(method string, raw []byte) ([]byte, error) {
+		if method == "host.http.do_stream" {
+			var req hostapi.HTTPRequest
+			var body cwRequest
+			_ = json.Unmarshal(raw, &req)
+			_ = json.Unmarshal(req.Body, &body)
+			seen <- body.ProfileArn
+		}
+		return h.call(method, raw)
+	}
+	raw, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
+		Model: "claude-opus-5.5", Payload: []byte(`{"messages":[{"role":"user","content":"synthetic test"}]}`), StorageJSON: []byte(`{"accessToken":"own-token","authMethod":"IdC","region":"us-east-1"}`),
+	}, StreamID: "down", HostCallbackID: "cb"})
+	result, err := executeKiroStream(raw)
+	var env wire.Envelope
+	if err != nil || json.Unmarshal(result, &env) != nil || !env.OK {
+		t.Fatalf("stream admission failed: %v %s", err, result)
+	}
+	h.waitReading(t)
+	activeStreams.Lock()
+	jobs := make([]*streamJob, 0, len(activeStreams.jobs))
+	for job := range activeStreams.jobs {
+		jobs = append(jobs, job)
+	}
+	activeStreams.Unlock()
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("assistantResponseEvent", `{"content":"ok"}`), Done: true}
+	if code := h.waitClose(t); code != "" {
+		t.Fatal(code)
+	}
+	for _, job := range jobs {
+		<-job.done
+	}
+	if arn := <-seen; arn != "arn:own-profile" {
+		t.Fatalf("missing organization profile: %s", arn)
+	}
+}
 
 func TestStreamEmitsBeforeUpstreamEOF(t *testing.T) {
 	h := installStreamHost(t)
@@ -399,5 +449,33 @@ func TestToolFingerprintPreservesNumbersAndNormalizesNestedKeys(t *testing.T) {
 	c, _ := toolFingerprint("x", `{"id":9007199254740992,"nested":{"b":2,"a":1}}`)
 	if a != b || a == c {
 		t.Fatal("unsafe argument deduplication")
+	}
+}
+
+func TestImageBytesDoNotInflateStreamStartUsage(t *testing.T) {
+	h := installStreamHost(t)
+	payload := []byte(fmt.Sprintf(`{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"%s"}}]}]}`, strings.Repeat("AAAA", 65536)))
+	raw, err := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "claude-opus-5.5", Payload: payload, StorageJSON: []byte(`{"accessToken":"test","profileArn":"arn:test"}`)}, StreamID: "image", HostCallbackID: "cb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := executeKiroStream(raw)
+	var env wire.Envelope
+	if err != nil || json.Unmarshal(admitted, &env) != nil || !env.OK {
+		t.Fatalf("stream admission failed: %v %s", err, admitted)
+	}
+	h.waitReading(t)
+	h.chunks <- hostapi.HTTPChunk{Payload: encodeFrame("assistantResponseEvent", `{"content":"ok"}`), Done: true}
+	start := h.waitEvent(t, "message_start")
+	var event struct{ Message claudeResponse }
+	if err := json.Unmarshal([]byte(sseData(start)), &event); err != nil {
+		t.Fatal(err)
+	}
+	// The image has no decodable dimensions, so use the flat image allowance.
+	if n := event.Message.Usage.InputTokens; n < int(imageTokenFallback) || n > int(imageTokenFallback)+12 {
+		t.Errorf("image start tokens = %d", n)
+	}
+	if code := h.waitClose(t); code != "" {
+		t.Fatal(code)
 	}
 }
